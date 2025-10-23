@@ -1,0 +1,42 @@
+/* app/globals.css */
+
+/* Si usás Tailwind v3: */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Si migraste a v4 con @import, este bloque de arriba mantiene compatibilidad. */
+
+:root {
+  --cell: 42px;
+}
+
+.card {
+  @apply rounded-2xl border border-neutral-300/70 dark:border-neutral-800 p-4 bg-white dark:bg-neutral-950;
+}
+
+/* Enfoque visible para celdas activas */
+.cell {
+  @apply border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900;
+}
+.cell-active {
+  @apply outline outline-2 outline-amber-400 dark:outline-amber-500;
+}
+.cell-word {
+  @apply bg-amber-50 dark:bg-amber-950/40;
+}
+.cell-block {
+  @apply bg-neutral-900 dark:bg-neutral-200;
+}
+
+/* Botones */
+.btn {
+  @apply rounded-xl border border-neutral-300/70 dark:border-neutral-700/60 px-3 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-900;
+}
+.btn-primary {
+  @apply border-amber-500 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30;
+}
+
+/* Lista de pistas */
+.clues h3 { @apply font-semibold mb-2; }
+.clues li { @apply leading-7; }
