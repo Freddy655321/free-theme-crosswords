@@ -1,9 +1,9 @@
 // app/components/ClueList.tsx
 "use client";
 
-import type { Puzzle } from "../../types/puzzle";
+import type { Puzzle, Direction } from "../../types/puzzle";
 import { useMemo } from "react";
-import { useCrosswordStore, Direction } from "../store/crosswordStore";
+import { useCrosswordStore } from "../store/crosswordStore";
 
 export default function ClueList({ puzzle }: { puzzle: Puzzle }) {
   const { selection, direction, selectClue, setDirection } = useCrosswordStore();
@@ -17,18 +17,17 @@ export default function ClueList({ puzzle }: { puzzle: Puzzle }) {
     [puzzle]
   );
 
-  // Determinar número de pista activa y opuesta
   const activeNumbers = useMemo(() => {
     if (!selection) return { across: null as number | null, down: null as number | null };
 
     const { row, col } = selection;
 
-    // Across
+    // Across: retroceder hasta el inicio de palabra
     let c = col;
     while (c - 1 >= 0 && !puzzle.grid[row * puzzle.width + (c - 1)].isBlock) c--;
     const numAcross = (puzzle.grid[row * puzzle.width + c].number ?? null) as number | null;
 
-    // Down
+    // Down: retroceder hasta el inicio de palabra
     let r = row;
     while (r - 1 >= 0 && !puzzle.grid[(r - 1) * puzzle.width + col].isBlock) r--;
     const numDown = (puzzle.grid[r * puzzle.width + col].number ?? null) as number | null;
@@ -36,13 +35,11 @@ export default function ClueList({ puzzle }: { puzzle: Puzzle }) {
     return { across: numAcross, down: numDown };
   }, [selection, puzzle]);
 
-  // Click en pista
   function handleClick(num: number, dir: Direction) {
     setDirection(dir);
     selectClue(num, dir);
   }
 
-  // Cálculo para saber cuál es la pista opuesta activa
   const activeDir = direction;
   const oppositeDir: Direction = activeDir === "across" ? "down" : "across";
 

@@ -11,7 +11,7 @@ interface ConsentCtx {
   reject: () => void;
   isProd: boolean;
   clientId: string | null;
-  adsReady: boolean; // script cargado y window.adsbygoogle listo
+  adsReady: boolean;
 }
 
 const ConsentContext = createContext<ConsentCtx | null>(null);
@@ -25,31 +25,29 @@ declare global {
 
 const CONSENT_KEY = "ftc-consent";
 const isProdEnv = typeof process !== "undefined" && process.env.NODE_ENV === "production";
-const clientIdEnv = (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_ADSENSE_CLIENT : undefined) || null;
+const clientIdEnv =
+  (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_ADSENSE_CLIENT : undefined) || null;
 
 export function ConsentProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<ConsentStatus>("unknown");
   const [adsReady, setAdsReady] = useState(false);
 
-  // Lee consentimiento inicial del storage
+  // Leer preferencia guardada
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = window.localStorage.getItem(CONSENT_KEY) as ConsentStatus | null;
     if (saved === "accepted" || saved === "rejected") setStatus(saved);
   }, []);
 
+  // Cargar script de AdSense SOLO en producción y con consentimiento aceptado
   const loadAdsScript = useCallback(() => {
-    if (!isProdEnv) return;
-    if (!clientIdEnv) return;
-    if (typeof window === "undefined") return;
+    if (!isProdEnv || !clientIdEnv || typeof window === "undefined") return;
     if (window.__adsenseLoaded) {
-      // ya cargado anteriormente
       setAdsReady(true);
       return;
     }
-
     const s = document.createElement("script");
-    s.setAttribute("async", "");
+    s.async = true;
     s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(
       clientIdEnv
     )}`;
@@ -59,29 +57,21 @@ export function ConsentProvider({ children }: { children: React.ReactNode }) {
       window.__adsenseLoaded = true;
       setAdsReady(true);
     };
-    s.onerror = () => {
-      // no bloqueamos la app si falla
-      setAdsReady(false);
-    };
+    s.onerror = () => setAdsReady(false);
     document.head.appendChild(s);
   }, []);
 
-  // Si ya aceptó, cargamos script
   useEffect(() => {
     if (status === "accepted") loadAdsScript();
   }, [status, loadAdsScript]);
 
   const accept = useCallback(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(CONSENT_KEY, "accepted");
-    }
+    if (typeof window !== "undefined") window.localStorage.setItem(CONSENT_KEY, "accepted");
     setStatus("accepted");
   }, []);
 
   const reject = useCallback(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(CONSENT_KEY, "rejected");
-    }
+    if (typeof window !== "undefined") window.localStorage.setItem(CONSENT_KEY, "rejected");
     setStatus("rejected");
   }, []);
 
@@ -106,11 +96,10 @@ export function useConsent() {
   return ctx;
 }
 
-// Banner simple pegajoso inferior
 export function ConsentBanner() {
   const { status, accept, reject, isProd } = useConsent();
 
-  // En desarrollo ocultamos el banner (no hace falta consent)
+  // En desarrollo no mostramos banner; solo en producción.
   if (!isProd) return null;
   if (status !== "unknown") return null;
 
@@ -118,7 +107,14 @@ export function ConsentBanner() {
     <div className="fixed inset-x-0 bottom-0 z-50 bg-white/95 border-t border-gray-200 shadow-sm">
       <div className="mx-auto max-w-5xl px-4 py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
         <p className="text-sm text-gray-700">
-          Usamos cookies para personalizar contenido y medir el tráfico. ¿Aceptás el uso de cookies?
+          Usamos cookies para personalizar contenido y medir el tráfico.{" "}
+          <a
+            href="/politica-cookies"
+            className="underline text-blue-600 hover:text-blue-700"
+          >
+            Más info
+          </a>
+          .
         </p>
         <div className="ml-auto flex gap-2">
           <button

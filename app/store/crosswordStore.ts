@@ -2,12 +2,115 @@
 "use client";
 
 import { create, StateCreator } from "zustand";
-import type { Puzzle } from "../../types/puzzle";
+import type {
+  Puzzle,
+  Cell as cellT,
+  Clue as clueT,
+  Direction,
+} from "../../types/puzzle";
+export type { Direction } from "../../types/puzzle"; // ← re-export para ClueList
 import { loadQuickplay } from "../lib/quickplay";
 
-export type Direction = "across" | "down";
+// ===== Tipos del payload generado por la IA (validados por nuestro endpoint) =====
+type GenLanguage = "es" | "en";
+type GenDirection = "across" | "down";
 
-interface Selection {
+interface GenClue {
+  number: number;
+  answer: string; // puede venir con acentos fuera del grid
+  row: number; // 0-based
+  col: number; // 0-based
+  direction: GenDirection;
+  clue: string; // texto de la pista
+}
+
+interface GeneratedPayload {
+  theme: string;
+  language: GenLanguage;
+  size: number; // cuadrado
+  grid: string[][]; // letras A-Z o "#"
+  clues: GenClue[]; // across + down
+  title: string;
+  notes?: string;
+}
+
+// ===== Utilidades =====
+function idx(width: number, row: number, col: number) {
+  return row * width + col;
+}
+
+function normalizeAnswer(s: string) {
+  const map: Record<string, string> = {
+    á: "A",
+    é: "E",
+    í: "I",
+    ó: "O",
+    ú: "U",
+    ü: "U",
+    ñ: "N",
+  };
+  return s
+    .toLowerCase()
+    .replace(/[áéíóúüñ]/g, (ch) => map[ch] || ch)
+    .replace(/[^a-z0-9]/g, "")
+    .toUpperCase();
+}
+
+function fromGeneratedToPuzzle(p: GeneratedPayload): Puzzle {
+  const n = p.size;
+  const width = n;
+  const height = n;
+
+  // Inicializamos grid flatten
+  const grid: cellT[] = [];
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const ch = p.grid[r]?.[c] ?? "#";
+      const isBlock = ch === "#";
+      const cell: cellT = {
+        row: r,
+        col: c,
+        char: isBlock ? "" : (ch || "").toUpperCase(),
+        isBlock,
+      };
+      grid.push(cell);
+    }
+  }
+
+  // Numeración: colocamos el número en la celda de inicio de cada pista
+  for (const cl of p.clues) {
+    const i = idx(width, cl.row, cl.col);
+    const current = grid[i];
+    if (!current || current.isBlock) continue;
+    if (typeof current.number === "number") {
+      current.number = Math.min(current.number, cl.number);
+    } else {
+      current.number = cl.number;
+    }
+  }
+
+  // Clues
+  const clues: clueT[] = p.clues.map((cl) => ({
+    number: cl.number,
+    direction: cl.direction as Direction,
+    answer: normalizeAnswer(cl.answer),
+    text: cl.clue,
+  }));
+
+  const puzzle: Puzzle = {
+    id: `gen-${Date.now()}`,
+    title: p.title || `Crucigrama: ${p.theme}`,
+    width,
+    height,
+    grid,
+    clues,
+  };
+
+  return puzzle;
+}
+
+// ===== Estado =====
+export interface Selection {
   row: number;
   col: number;
 }
@@ -27,14 +130,13 @@ export interface CrosswordState {
   move: (dr: number, dc: number) => void;
   selectClue: (num: number, dir: Direction) => void;
 
-  // 🔄 persistencia / utilidades nuevas
-  setCharAt: (row: number, col: number, ch: string) => void; // set sin mover selección
-  hydrateFromChars: (chars: string[]) => void; // aplica progreso al grid
-  getChars: () => string[]; // chars lineales del grid (para guardar)
-}
+  // 🔄 utilidades
+  setCharAt: (row: number, col: number, ch: string) => void;
+  hydrateFromChars: (chars: string[]) => void;
+  getChars: () => string[];
 
-function idx(width: number, row: number, col: number) {
-  return row * width + col;
+  // 🧠 NUEVO: cargar desde payload generado por IA
+  loadFromGenerated: (payload: GeneratedPayload) => void;
 }
 
 const creator: StateCreator<CrosswordState> = (set, get) => ({
@@ -127,14 +229,12 @@ const creator: StateCreator<CrosswordState> = (set, get) => ({
     const p = s.puzzle;
     if (!p) return;
 
-    // Buscamos la celda que tiene ese 'number'
     const start = p.grid.find((c) => !c.isBlock && c.number === num);
     if (!start) return;
     set({ selection: { row: start.row, col: start.col }, direction: dir });
   },
 
-  // ======= NUEVO: utilidades para persistencia =======
-
+  // ======= utilidades para persistencia =======
   setCharAt: (row: number, col: number, ch: string) => {
     const s = get();
     const p = s.puzzle;
@@ -167,7 +267,17 @@ const creator: StateCreator<CrosswordState> = (set, get) => ({
   getChars: () => {
     const p = get().puzzle;
     if (!p) return [];
-    return p.grid.map((cell) => (cell.isBlock ? "" : (cell.char ?? "")));
+    return p.grid.map((cell) => (cell.isBlock ? "" : cell.char ?? ""));
+  },
+
+  // ======= NUEVO: cargar desde IA =======
+  loadFromGenerated: (payload: GeneratedPayload) => {
+    const puzzle = fromGeneratedToPuzzle(payload);
+    set({
+      puzzle,
+      selection: { row: 0, col: 0 },
+      direction: "across",
+    });
   },
 });
 
