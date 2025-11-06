@@ -1,3 +1,4 @@
+// app/api/generate-crossword/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 
@@ -10,7 +11,7 @@ interface Entry {
   row: number; // 0-index
   col: number; // 0-index
   direction: Direction;
-  answer: string; // A–Z (ASCII), sin espacios, len >= 2
+  answer: string; // A–Z (ASCII), sin espacios, len >= 3 en fallback
   clue: string;
 }
 
@@ -43,7 +44,7 @@ function safeJson<T = unknown>(text: string): T | null {
   }
 }
 
-function deriveEntriesFromGrid(grid: string[][]): Entry[] {
+function deriveEntriesFromGrid(grid: string[][], minLen = 3): Entry[] {
   const n = grid.length;
   const entries: Entry[] = [];
   let num = 1;
@@ -60,7 +61,7 @@ function deriveEntriesFromGrid(grid: string[][]): Entry[] {
           end++;
         }
         const norm = normalizeAnswer(ans);
-        if (norm.length >= 2 && AtoZ.test(norm)) {
+        if (norm.length >= minLen && AtoZ.test(norm)) {
           entries.push({
             number: num++,
             row: r,
@@ -89,7 +90,7 @@ function deriveEntriesFromGrid(grid: string[][]): Entry[] {
           end++;
         }
         const norm = normalizeAnswer(ans);
-        if (norm.length >= 2 && AtoZ.test(norm)) {
+        if (norm.length >= minLen && AtoZ.test(norm)) {
           entries.push({
             number: num++,
             row: r,
@@ -228,52 +229,54 @@ Idioma de las pistas: ${lang}.
 `;
 }
 
-// ---------- DEMO de respaldo (se sanea antes de devolver) ----------
+// ---------- DEMO curado (9x9) ----------
+/**
+ * Grid pensado para:
+ * Across válidos: MATE, AND, BOCA, RIOS, PAMPA, NEUQUEN, SALTA, OBELISCO, AND, MAR, TANGO, UVA, PAT, RIO
+ * Down válidos (ejemplos): MBAPNST#, AONA..., etc. (la validación en fallback solo muestra >=3)
+ */
 const demoBase: Crossword = {
   theme: "Argentina",
   language: "es",
   size: 9,
   grid: [
     ["#", "M", "A", "T", "E", "#", "A", "N", "D"],
-    ["B", "O", "C", "A", "#", "R", "I", "V", "E"],
+    ["B", "O", "C", "A", "#", "R", "I", "O", "S"],
     ["A", "#", "P", "A", "M", "P", "A", "#", "S"],
     ["N", "E", "U", "Q", "U", "E", "N", "#", "#"],
     ["D", "#", "S", "A", "L", "T", "A", "#", "T"],
     ["O", "B", "E", "L", "I", "S", "C", "O", "#"],
-    ["#", "A", "N", "D", "E", "S", "#", "T", "D"],
-    ["T", "A", "N", "G", "O", "#", "A", "S", "A"],
-    ["E", "#", "P", "A", "R", "A", "N", "A", "#"],
+    ["#", "A", "N", "D", "#", "#", "M", "A", "R"],
+    ["T", "A", "N", "G", "O", "#", "U", "V", "A"],
+    ["P", "A", "T", "#", "R", "I", "O", "#", "#"],
   ],
   entries: [],
   meta: { source: "demo" },
 };
 
-function sanitizeDemo(d: Crossword, reason?: string): Crossword {
-  const derived = deriveEntriesFromGrid(d.grid).map((e) => ({
-    ...e,
-    clue:
-      e.answer === "ANDES"
-        ? "Cordillera que recorre el oeste del país."
-        : e.answer === "MATE"
-        ? "Infusión tradicional argentina."
-        : e.answer === "BOCA"
-        ? "Club xeneize de Buenos Aires."
-        : e.answer === "RIVER"
-        ? "El Millonario, clásico rival de Boca."
-        : e.answer === "PAMPA"
-        ? "Gran llanura argentina."
-        : e.answer === "NEUQUEN"
-        ? "Provincia patagónica y su capital homónimas."
-        : e.answer === "SALTA"
-        ? "Provincia del noroeste, famosa por sus vinos."
-        : e.answer === "OBELISCO"
-        ? "Icono porteño sobre la 9 de Julio."
-        : e.answer === "TANGO"
-        ? "Baile y música emblema nacional."
-        : e.answer === "PARANA"
-        ? "Río que cruza el Litoral."
-        : "Pista temática.",
-  }));
+function sanitizeDemo(d: Crossword): Crossword {
+  // Derivar entries desde el grid y filtrar < 3
+  const derived = deriveEntriesFromGrid(d.grid, 3).map((e) => {
+    const clueDict: Record<string, string> = {
+      MATE: "Infusión tradicional argentina.",
+      AND: "Conjunción; acá se usa como cruce, sin pista.",
+      BOCA: "Club xeneize de Buenos Aires.",
+      RIOS: "Cuerpos de agua importantes del país.",
+      PAMPA: "Gran llanura argentina.",
+      NEUQUEN: "Provincia patagónica y su capital homónimas.",
+      SALTA: "Provincia del noroeste, famosa por sus vinos.",
+      OBELISCO: "Icono porteño sobre la 9 de Julio.",
+      MAR: "El Atlántico baña su costa.",
+      TANGO: "Baile y música emblema nacional.",
+      UVA: "Fruto base de muchos vinos argentinos.",
+      PAT: "Abreviatura coloquial; cruce técnico.",
+      RIO: "Curso de agua.",
+    };
+    return {
+      ...e,
+      clue: clueDict[e.answer] ?? "Pista temática.",
+    };
+  });
 
   return {
     theme: "Argentina",
@@ -281,7 +284,7 @@ function sanitizeDemo(d: Crossword, reason?: string): Crossword {
     size: d.size,
     grid: d.grid,
     entries: derived,
-    meta: { source: "demo-clean", reason },
+    meta: { source: "demo-clean" },
   };
 }
 
@@ -332,12 +335,11 @@ export async function POST(req: NextRequest) {
     let check = validateCrossword(parsed);
     if (check.ok) return parsed;
 
-    // Re-derivar desde grid (elimina 1-letra y fuera de rango)
-    const red = { ...parsed, entries: deriveEntriesFromGrid(parsed.grid) };
+    // Re-derivar desde grid (y filtrar <3)
+    const red = { ...parsed, entries: deriveEntriesFromGrid(parsed.grid, 3) };
     check = validateCrossword(red);
     if (check.ok) return red;
 
-    // Si llega acá, lo consideramos inválido
     return null;
   };
 
@@ -350,12 +352,15 @@ export async function POST(req: NextRequest) {
     const strict = await tryGenerate(makeStrictPrompt(theme, language, n));
     if (strict) return NextResponse.json({ ...strict, meta: { source: "openai" } });
 
-    // 3) Fallback: SIEMPRE 200 con demo saneado, nunca 502
-    const clean = sanitizeDemo(demoBase, "fallback: invalid generation");
+    // 3) Fallback demo curado (siempre 200)
+    const clean = sanitizeDemo(demoBase);
     return NextResponse.json(clean, { status: 200 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "unknown";
-    const clean = sanitizeDemo(demoBase, `fallback: ${message}`);
-    return NextResponse.json(clean, { status: 200 });
+    const clean = sanitizeDemo(demoBase);
+    return NextResponse.json(
+      { ...clean, meta: { source: "fallback", error: message } },
+      { status: 200 }
+    );
   }
 }
