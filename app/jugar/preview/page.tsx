@@ -1,8 +1,10 @@
 // app/jugar/preview/page.tsx
 "use client";
 
-import React from "react";
+import React, { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+
+export const dynamic = "force-dynamic"; // evita SSG/ISR, corre en runtime
 
 type Direction = "across" | "down";
 type Meta = { source?: string; reason?: string; [k: string]: unknown };
@@ -24,7 +26,7 @@ interface Crossword {
   meta?: Meta;
 }
 
-export default function PreviewPage() {
+function PreviewInner() {
   const search = useSearchParams();
   const [data, setData] = React.useState<Crossword | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -48,15 +50,16 @@ export default function PreviewPage() {
         }
       } catch {}
 
-      // Plan B: refetch con theme/lang que vienen en la URL o últimos guardados
+      // Plan B: refetch con theme/lang
       const theme =
         search.get("theme") ||
         (typeof window !== "undefined" ? localStorage.getItem("ftc:lastTheme") : "") ||
         "Argentina";
       const lang =
         (search.get("lang") as "es" | "en") ||
-        (typeof window !== "undefined" ? (localStorage.getItem("ftc:lastLang") as "es" | "en" | null) : null) ||
-        "es";
+        (typeof window !== "undefined"
+          ? ((localStorage.getItem("ftc:lastLang") as "es" | "en" | null) ?? "es")
+          : "es");
 
       try {
         const res = await fetch("/api/generate-crossword", {
@@ -210,5 +213,20 @@ export default function PreviewPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense
+      fallback={
+        <main className="mx-auto max-w-5xl p-4">
+          <h1 className="text-2xl font-semibold">Vista previa del crucigrama</h1>
+          <p className="text-sm text-gray-500 mt-2">Preparando…</p>
+        </main>
+      }
+    >
+      <PreviewInner />
+    </Suspense>
   );
 }
