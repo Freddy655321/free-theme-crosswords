@@ -1,297 +1,361 @@
-// /app/api/generate-crossword/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { Crossword, Entry, isCrossword, explainCrosswordError } from "../../../lib/crossword";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-export const maxDuration = 30;
 
-const MODEL = "gpt-4o-mini";
+type Direction = "across" | "down";
 
-/* ---------- Prompts ---------- */
-function buildSystemPrompt(): string {
-  return [
-    "Eres un generador de crucigramas ESTRICTO. Responde SOLO JSON válido.",
-    "Requisitos:",
-    "- Crucigrama CUADRADO, tamaño entre 9 y 13 (preferir 9).",
-    "- '#' indica bloque. Una letra por celda (A–Z, admite acentos).",
-    "- Usa 'entries' con: number,row,col,direction('across'|'down'),answer,clue.",
-    "- Las answers deben encajar en la grilla SIN pisar '#'.",
-    "- Numera clásicos: izquierda→derecha (across) y arriba→abajo (down).",
-    "- Nivel fácil/medio, pistas claras, sin nombres demasiado oscuros.",
-  ].join("\n");
+interface Entry {
+  number: number;
+  row: number; // 0-index
+  col: number; // 0-index
+  direction: Direction;
+  answer: string; // A–Z (ASCII), sin espacios, len >= 2
+  clue: string;
 }
 
-function buildUserPrompt(theme: string, language: string): string {
-  return [
-    `Tema: "${theme}".`,
-    `Idioma de las PISTAS: ${language}.`,
-    "Preferí tamaño 9x9. Permitido 10–13 si mejora cruces.",
-    "Objetivo: 12–18 palabras, cruces limpios y sin letras sueltas.",
-    "Devuelve JSON con: title, language, size, grid (NxN; '#' en bloques), entries[].",
-  ].join("\n");
+interface Crossword {
+  theme: string;
+  language: "es" | "en";
+  size: number; // NxN
+  grid: string[][];
+  entries: Entry[];
+  meta?: Record<string, unknown>;
 }
 
-// Prompt más estricto para reintento: fija 9x9 y SOLO entries
-function buildRetryPrompt(theme: string, language: string): string {
-  return [
-    `Tema: "${theme}".`,
-    `Idioma de las PISTAS: ${language}.`,
-    "Generá un crucigrama de tamaño EXACTO 9x9.",
-    "Devuelve SOLO este JSON (sin campos extra, SIN 'grid'):",
-    `{
-  "title": "Crucigrama sobre ${theme}",
+// ---------- Utilidades ----------
+const AtoZ = /^[A-ZÑÁÉÍÓÚÜ]+$/u;
+const isBlock = (c: string) => c === "#";
+
+function normalizeAnswer(s: string) {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/\s|-/g, "");
+}
+
+function safeJson<T = unknown>(text: string): T | null {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
+function deriveEntriesFromGrid(grid: string[][]): Entry[] {
+  const n = grid.length;
+  const entries: Entry[] = [];
+  let num = 1;
+
+  // Across
+  for (let r = 0; r < n; r++) {
+    let c = 0;
+    while (c < n) {
+      if (!isBlock(grid[r][c]) && (c === 0 || isBlock(grid[r][c - 1]))) {
+        let end = c;
+        let ans = "";
+        while (end < n && !isBlock(grid[r][end])) {
+          ans += grid[r][end];
+          end++;
+        }
+        const norm = normalizeAnswer(ans);
+        if (norm.length >= 2 && AtoZ.test(norm)) {
+          entries.push({
+            number: num++,
+            row: r,
+            col: c,
+            direction: "across",
+            answer: norm,
+            clue: "",
+          });
+        }
+        c = end + 1;
+        continue;
+      }
+      c++;
+    }
+  }
+
+  // Down
+  for (let c = 0; c < n; c++) {
+    let r = 0;
+    while (r < n) {
+      if (!isBlock(grid[r][c]) && (r === 0 || isBlock(grid[r - 1][c]))) {
+        let end = r;
+        let ans = "";
+        while (end < n && !isBlock(grid[end][c])) {
+          ans += grid[end][c];
+          end++;
+        }
+        const norm = normalizeAnswer(ans);
+        if (norm.length >= 2 && AtoZ.test(norm)) {
+          entries.push({
+            number: num++,
+            row: r,
+            col: c,
+            direction: "down",
+            answer: norm,
+            clue: "",
+          });
+        }
+        r = end + 1;
+        continue;
+      }
+      r++;
+    }
+  }
+
+  return entries;
+}
+
+function validateCrossword(x: Crossword) {
+  const problems: string[] = [];
+  if (!x || !Array.isArray(x.grid) || !Array.isArray(x.entries)) {
+    problems.push("Estructura base inválida.");
+    return { ok: false, problems };
+  }
+  const n = x.grid.length;
+  if (n < 9 || n > 13) problems.push("size fuera de rango [9..13].");
+
+  for (const row of x.grid) {
+    if (!Array.isArray(row) || row.length !== n) {
+      problems.push("Grid no es NxN.");
+      break;
+    }
+    for (const cell of row) {
+      if (typeof cell !== "string" || (!isBlock(cell) && !AtoZ.test(normalizeAnswer(cell)))) {
+        problems.push("Grid contiene celdas inválidas.");
+        break;
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  let across = 0;
+  let down = 0;
+
+  for (const e of x.entries) {
+    if (e.answer.length < 2) problems.push(`Entrada #${e.number} < 2 letras.`);
+    if (!AtoZ.test(e.answer)) problems.push(`Entrada #${e.number} con caracteres inválidos.`);
+    if (e.direction === "across") across++;
+    else if (e.direction === "down") down++;
+
+    const sig = `${e.direction}@${e.row},${e.col}`;
+    if (seen.has(sig)) problems.push(`Entrada duplicada en ${sig}.`);
+    seen.add(sig);
+
+    for (let k = 0; k < e.answer.length; k++) {
+      const rr = e.row + (e.direction === "down" ? k : 0);
+      const cc = e.col + (e.direction === "across" ? k : 0);
+      if (rr >= n || cc >= n) {
+        problems.push(`Entrada #${e.number} se sale del grid.`);
+        break;
+      }
+      const cell = x.grid[rr][cc];
+      if (isBlock(cell)) {
+        problems.push(`Entrada #${e.number} atraviesa bloque.`);
+        break;
+      }
+    }
+  }
+
+  const total = across + down;
+  if (total < 18 && n === 9) problems.push("Muy pocas entradas (min 18 para 9x9).");
+  if (total < 24 && n === 11) problems.push("Muy pocas entradas (min 24 para 11x11).");
+  if (total < 30 && n === 13) problems.push("Muy pocas entradas (min 30 para 13x13).");
+  const diff = Math.abs(across - down);
+  if (total > 0 && diff / total > 0.35) problems.push("Desbalance entre across/down.");
+
+  const trivial = x.entries.filter((e) => /\b(letra|vocal|consonante)\b/i.test(e.clue));
+  if (trivial.length > 4) problems.push("Demasiadas pistas triviales.");
+
+  return { ok: problems.length === 0, problems };
+}
+
+function ensureClueQuality(e: Entry, language: "es" | "en"): Entry {
+  if (language === "es") {
+    if (e.answer === "MENDOZA" && /regi(o|ó)n/i.test(e.clue)) {
+      return { ...e, clue: "Provincia argentina famosa por su vino." };
+    }
+  }
+  return e;
+}
+
+// ---------- Prompts ----------
+function makeStrictPrompt(theme: string, language: "es" | "en", size: number) {
+  const langLine =
+    language === "es"
+      ? `Escribe pistas sólidas en español rioplatense.`
+      : `Write solid clues in natural English.`;
+
+  return `
+TAREA: Diseñar un crucigrama ${size}x${size} sobre el tema "${theme}".
+REQUISITOS ESTRICTOS:
+- Devuelve SOLO JSON (sin texto extra): theme, language, size, grid, entries, meta.
+- Grid ${size}x${size} con letras A–Z (ASCII) o "#".
+- Todas las entries con longitud mínima 2 (prohibido 1 letra).
+- Mínimos: 18 (9x9), 24 (11x11), 30 (13x13). Balance across/down (diferencia ≤35%).
+- Evita pistas triviales tipo “letra/vocal/consonante”.
+- Answers en mayúsculas, sin espacios ni guiones.
+- Cada entry debe calzar exacto en el grid; no atravieses "#".
+- Estética similar a crucigramas del NYT.
+
+${langLine}
+
+FORMATO JSON:
+{
+  "theme": "${theme}",
   "language": "${language}",
-  "size": 9,
+  "size": ${size},
+  "grid": string[${size}][${size}],
   "entries": [
-    // EXACTAMENTE 14 entradas: 7 'across' y 7 'down'.
-    // Cada item: { "number": <entero>, "row": 0..8, "col": 0..8, "direction": "across"|"down", "answer": "PALABRA", "clue": "Texto de pista" }
-    // Coordenadas dentro de 0..8. No repitas (number,direction).
-  ]
-}`,
-    "Responde SOLO JSON válido.",
-  ].join("\n");
+    { "number": 1, "row": 0, "col": 0, "direction": "across", "answer": "EJEMPLO", "clue": "Pista clara y específica." }
+  ],
+  "meta": { "source": "openai" }
+}
+`;
 }
 
-/* ---------- Utilidades ---------- */
-type OAErrorShape = {
-  response?: {
-    status?: number;
-    data?: { error?: { code?: string; type?: string; message?: string } };
-  };
-  message?: string;
+function makeFreePrompt(theme: string, language: "es" | "en", size: number) {
+  const lang = language === "es" ? "español rioplatense" : "English";
+  return `
+Generá un crucigrama ${size}x${size} sobre "${theme}".
+- Devolvé SOLO JSON con (theme, language, size, grid, entries, meta).
+- Evitá respuestas de 1 letra y pistas triviales. Balanceá across y down.
+- Respuestas en mayúsculas sin espacios (A-Z).
+Idioma de las pistas: ${lang}.
+`;
+}
+
+// ---------- DEMO de respaldo (se sanea antes de devolver) ----------
+const demoBase: Crossword = {
+  theme: "Argentina",
+  language: "es",
+  size: 9,
+  grid: [
+    ["#", "M", "A", "T", "E", "#", "A", "N", "D"],
+    ["B", "O", "C", "A", "#", "R", "I", "V", "E"],
+    ["A", "#", "P", "A", "M", "P", "A", "#", "S"],
+    ["N", "E", "U", "Q", "U", "E", "N", "#", "#"],
+    ["D", "#", "S", "A", "L", "T", "A", "#", "T"],
+    ["O", "B", "E", "L", "I", "S", "C", "O", "#"],
+    ["#", "A", "N", "D", "E", "S", "#", "T", "D"],
+    ["T", "A", "N", "G", "O", "#", "A", "S", "A"],
+    ["E", "#", "P", "A", "R", "A", "N", "A", "#"],
+  ],
+  entries: [],
+  meta: { source: "demo" },
 };
 
-function extractOpenAIError(e: unknown): { status?: number; code?: string; type?: string; message: string } {
-  const base: { status?: number; code?: string; type?: string; message: string } = { message: "Error interno" };
-  const err = e as OAErrorShape;
-  if (typeof err?.message === "string") base.message = err.message;
-  const resp = err?.response;
-  if (resp) {
-    if (typeof resp.status === "number") base.status = resp.status;
-    const inner = resp.data?.error;
-    if (inner) {
-      if (typeof inner.code === "string") base.code = inner.code;
-      if (typeof inner.type === "string") base.type = inner.type;
-      if (typeof inner.message === "string") base.message = inner.message;
-    }
-  }
-  return base;
+function sanitizeDemo(d: Crossword, reason?: string): Crossword {
+  const derived = deriveEntriesFromGrid(d.grid).map((e) => ({
+    ...e,
+    clue:
+      e.answer === "ANDES"
+        ? "Cordillera que recorre el oeste del país."
+        : e.answer === "MATE"
+        ? "Infusión tradicional argentina."
+        : e.answer === "BOCA"
+        ? "Club xeneize de Buenos Aires."
+        : e.answer === "RIVER"
+        ? "El Millonario, clásico rival de Boca."
+        : e.answer === "PAMPA"
+        ? "Gran llanura argentina."
+        : e.answer === "NEUQUEN"
+        ? "Provincia patagónica y su capital homónimas."
+        : e.answer === "SALTA"
+        ? "Provincia del noroeste, famosa por sus vinos."
+        : e.answer === "OBELISCO"
+        ? "Icono porteño sobre la 9 de Julio."
+        : e.answer === "TANGO"
+        ? "Baile y música emblema nacional."
+        : e.answer === "PARANA"
+        ? "Río que cruza el Litoral."
+        : "Pista temática.",
+  }));
+
+  return {
+    theme: "Argentina",
+    language: "es",
+    size: d.size,
+    grid: d.grid,
+    entries: derived,
+    meta: { source: "demo-clean", reason },
+  };
 }
 
-function maskKey(k: string | undefined) {
-  if (!k) return "undefined";
-  const s = k.trim();
-  return `${s.slice(0, 6)}...${s.slice(-4)} (len=${s.length})`;
-}
-
-/* ---------- Reconstrucción ---------- */
-function clampSize(n: number | undefined): number {
-  const v = typeof n === "number" && Number.isFinite(n) ? Math.round(n) : 9;
-  return Math.max(9, Math.min(13, v));
-}
-
-function sanitizeEntry(raw: unknown, size: number): Entry | null {
-  const e = raw as Record<string, unknown>;
-  const dirRaw = e?.direction;
-  const dir = dirRaw === "down" ? "down" : dirRaw === "across" ? "across" : null;
-
-  const number = typeof e?.number === "number" ? e.number : NaN;
-  const row = typeof e?.row === "number" ? e.row : NaN;
-  const col = typeof e?.col === "number" ? e.col : NaN;
-  const ansRaw = typeof e?.answer === "string" ? e.answer : "";
-  const clueRaw = typeof e?.clue === "string" ? e.clue : "";
-
-  if (!dir || !Number.isFinite(number) || !Number.isFinite(row) || !Number.isFinite(col)) return null;
-  if (row < 0 || col < 0 || row >= size || col >= size) return null;
-
-  const answer = ansRaw
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toUpperCase()
-    .replace(/[^A-ZÑ]/g, "");
-
-  const clue = clueRaw.trim();
-  if (!answer || !clue) return null;
-
-  return { number, row, col, direction: dir, answer, clue };
-}
-
-function rebuildGrid(candidate: Crossword): Crossword {
-  const size = clampSize(candidate.size || candidate.grid?.length || 9);
-  const grid: string[][] = Array.from({ length: size }, () => Array.from({ length: size }, () => "#"));
-
-  const entries = [...candidate.entries].sort((a, b) => a.number - b.number);
-  for (const e of entries) {
-    const word = e.answer.toUpperCase();
-    if (e.direction === "across") {
-      if (e.col + word.length > size) continue;
-      for (let i = 0; i < word.length; i++) {
-        const r = e.row;
-        const c = e.col + i;
-        const ch = word[i];
-        grid[r][c] = ch;
-      }
-    } else {
-      if (e.row + word.length > size) continue;
-      for (let i = 0; i < word.length; i++) {
-        const r = e.row + i;
-        const c = e.col;
-        const ch = word[i];
-        grid[r][c] = ch;
-      }
-    }
-  }
-
-  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) if (grid[r][c] === "") grid[r][c] = "#";
-
-  return { ...candidate, size, grid };
-}
-
-/* ---------- Core ---------- */
-async function callOpenAI(client: OpenAI, theme: string, language: string, attempt: 1 | 2) {
-  const messages =
-    attempt === 1
-      ? [
-          { role: "system" as const, content: buildSystemPrompt() },
-          { role: "user" as const, content: buildUserPrompt(theme, language) },
-        ]
-      : [
-          { role: "system" as const, content: buildSystemPrompt() },
-          { role: "user" as const, content: buildRetryPrompt(theme, language) },
-        ];
-
-  const completion = await client.chat.completions.create({
-    model: MODEL,
-    temperature: attempt === 1 ? 0.3 : 0.2,
-    response_format: { type: "json_object" },
-    messages,
-  });
-
-  const content = completion.choices[0]?.message?.content ?? "";
-  return content;
-}
-
-function sanitizeAndBuild(rawUnknown: unknown, fallbackTitle: string, fallbackLang: string): { built: Crossword; count: number } {
-  const raw = rawUnknown as { size?: unknown; grid?: unknown; entries?: unknown; title?: unknown; language?: unknown };
-
-  const size = clampSize(
-    typeof raw.size === "number" ? raw.size : Array.isArray(raw.grid) ? (raw.grid as unknown[]).length : 9
-  );
-
-  const entriesRaw = Array.isArray(raw.entries) ? (raw.entries as unknown[]) : [];
-  const seen = new Set<string>();
-  const cleanEntries = entriesRaw
-    .map((e: unknown) => sanitizeEntry(e, size))
-    .filter((e): e is Entry => e !== null)
-    .filter((e: Entry) => {
-      const k = `${e.number}:${e.direction}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-
-  const base: Crossword = {
-    title: typeof raw.title === "string" && raw.title.trim() ? (raw.title as string).trim() : fallbackTitle,
-    language:
-      typeof raw.language === "string" && (raw.language as string).trim()
-        ? (raw.language as string)
-        : fallbackLang,
-    size,
-    grid: Array.from({ length: size }, () => Array.from({ length: size }, () => "#")),
-    entries: cleanEntries,
-    meta: { source: "openai" },
+// ---------- Handler ----------
+export async function POST(req: NextRequest) {
+  const body = (await req.json().catch(() => ({}))) as {
+    theme?: string;
+    language?: "es" | "en";
+    size?: number;
   };
 
-  const rebuilt = rebuildGrid(base);
-  return { built: rebuilt, count: cleanEntries.length };
-}
+  const theme = body.theme ?? "Argentina";
+  const language = body.language ?? "es";
+  const n = Math.min(13, Math.max(9, Number(body.size) || 9));
 
-export async function POST(req: NextRequest) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const client = apiKey ? new OpenAI({ apiKey }) : null;
+
+  const tryGenerate = async (prompt: string): Promise<Crossword | null> => {
+    if (!client) return null;
+
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0.5,
+      max_tokens: 2000,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "Sos un constructor de crucigramas estricto. Devolvés SOLO JSON válido." },
+        { role: "user", content: prompt },
+      ],
+    });
+
+    const raw = completion.choices?.[0]?.message?.content ?? "";
+    const parsed = safeJson<Crossword>(raw);
+    if (!parsed) return null;
+
+    parsed.language = language;
+    parsed.size = Math.min(13, Math.max(9, parsed.size || n));
+    parsed.theme = theme;
+
+    parsed.entries = (parsed.entries || []).map((e) => ({
+      ...e,
+      answer: normalizeAnswer(e.answer),
+      clue: (e.clue || "").trim(),
+    }));
+    parsed.entries = parsed.entries.map((e) => ensureClueQuality(e, language));
+
+    let check = validateCrossword(parsed);
+    if (check.ok) return parsed;
+
+    // Re-derivar desde grid (elimina 1-letra y fuera de rango)
+    const red = { ...parsed, entries: deriveEntriesFromGrid(parsed.grid) };
+    check = validateCrossword(red);
+    if (check.ok) return red;
+
+    // Si llega acá, lo consideramos inválido
+    return null;
+  };
+
   try {
-    const bodyUnknown: unknown = await req.json();
-    const body = bodyUnknown as { theme?: unknown; language?: unknown };
-    const theme = body.theme;
-    const language = body.language;
+    // 1) Intento libre
+    const free = await tryGenerate(makeFreePrompt(theme, language, n));
+    if (free) return NextResponse.json({ ...free, meta: { source: "openai" } });
 
-    if (typeof theme !== "string" || typeof language !== "string") {
-      return NextResponse.json({ error: 'Faltan "theme" y/o "language" (string).' }, { status: 400 });
-    }
+    // 2) Intento estricto
+    const strict = await tryGenerate(makeStrictPrompt(theme, language, n));
+    if (strict) return NextResponse.json({ ...strict, meta: { source: "openai" } });
 
-    const apiKey = process.env.OPENAI_API_KEY?.trim();
-    if (!apiKey) return NextResponse.json({ error: "OPENAI_API_KEY no configurada." }, { status: 500 });
-    console.log("[generate-crossword] Using OPENAI_API_KEY:", maskKey(apiKey));
-
-    const client = new OpenAI({ apiKey });
-
-    // ---- Intento 1
-    let content = await callOpenAI(client, theme, language, 1);
-    let raw1: unknown;
-    try {
-      raw1 = JSON.parse(content);
-    } catch {
-      raw1 = {};
-    }
-    const { built: candidate1, count: count1 } = sanitizeAndBuild(
-      raw1,
-      `Crucigrama sobre ${theme}`,
-      language
-    );
-
-    // Si no hay suficientes entries, Intento 2 (más estricto)
-    const MIN_ENTRIES = 10; // umbral mínimo razonable para un 9x9
-    let finalPuzzle = candidate1;
-
-    if (count1 < MIN_ENTRIES) {
-      content = await callOpenAI(client, theme, language, 2);
-      let raw2: unknown;
-      try {
-        raw2 = JSON.parse(content);
-      } catch {
-        raw2 = {};
-      }
-      const { built: candidate2, count: count2 } = sanitizeAndBuild(
-        raw2,
-        `Crucigrama sobre ${theme}`,
-        language
-      );
-
-      if (count2 >= MIN_ENTRIES) {
-        finalPuzzle = candidate2;
-      } else {
-        return NextResponse.json({ error: "Muy pocas 'entries' válidas tras sanitizar." }, { status: 502 });
-      }
-    }
-
-    if (!isCrossword(finalPuzzle)) {
-      return NextResponse.json(
-        { error: `Formato inválido: ${explainCrosswordError(finalPuzzle)}` },
-        { status: 502 }
-      );
-    }
-
-    return NextResponse.json({ ...finalPuzzle, meta: { ...(finalPuzzle.meta ?? {}), source: "openai" } }, { status: 200 });
-  } catch (e: unknown) {
-    const d = extractOpenAIError(e);
-    console.error("generate-crossword error:", d, e);
-    const isQuota = d.status === 429 || d.code === "insufficient_quota" || /quota/i.test(d.message ?? "");
-    if (isQuota) {
-      const demo: Crossword = {
-        title: "Demo 9x9",
-        language: "es",
-        size: 9,
-        grid: Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => "#")),
-        entries: [
-          { number: 1, row: 0, col: 0, direction: "across", answer: "ARGENTINA", clue: "1. País de América del Sur." },
-          { number: 2, row: 0, col: 0, direction: "down", answer: "ANDES", clue: "2. Cordillera occidental." },
-        ],
-        meta: { source: "demo-429" },
-      };
-      const rebuilt = rebuildGrid(demo);
-      return NextResponse.json(rebuilt, { status: 200 });
-    }
-    const http = d.status && d.status >= 400 && d.status < 600 ? d.status : 502;
-    return NextResponse.json({ error: d.message || "Error interno." }, { status: http });
+    // 3) Fallback: SIEMPRE 200 con demo saneado, nunca 502
+    const clean = sanitizeDemo(demoBase, "fallback: invalid generation");
+    return NextResponse.json(clean, { status: 200 });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "unknown";
+    const clean = sanitizeDemo(demoBase, `fallback: ${message}`);
+    return NextResponse.json(clean, { status: 200 });
   }
 }
