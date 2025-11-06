@@ -1,208 +1,154 @@
 // app/generar/page.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import React from "react";
 import { useRouter } from "next/navigation";
 
-type Language = "es" | "en";
+type Lang = "es" | "en";
 
-type ApiError = {
-  error?: string;
-  message?: string;
-};
-
-type CrosswordPayload = {
-  title: string;
-  language: Language;
-  grid: unknown; // la UI de /jugar/pro conoce la forma exacta
-  clues: unknown;
-  // ...otros campos que vengan del API; no son necesarios acá para navegar
-};
-
-/** Type guard genérico para objetos */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+interface Entry {
+  number: number;
+  row: number;
+  col: number;
+  direction: "across" | "down";
+  answer: string;
+  clue: string;
+}
+interface Crossword {
+  theme: string;
+  language: Lang;
+  size: number;
+  grid: string[][];
+  entries: Entry[];
+  meta?: { source?: string; reason?: string; [k: string]: unknown };
+}
+interface ApiErr { error: string; }
+function isApiErr(x: unknown): x is ApiErr {
+  return typeof x === "object" && x !== null && typeof (x as ApiErr).error === "string";
 }
 
-/** Intenta parsear JSON; si falla, devuelve null */
-async function safeJson<T>(res: Response): Promise<T | null> {
-  try {
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-/** Extrae un mensaje de error legible desde posibles formas de error */
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  if (isRecord(err)) {
-    const m = err.message ?? err.error;
-    if (typeof m === "string") return m;
-  }
-  return "Fallo de red.";
-}
-
-export default function GenerarPage() {
+export default function GeneratePage() {
   const router = useRouter();
-  const [theme, setTheme] = useState<string>("Argentina");
-  const [language, setLanguage] = useState<Language>("es");
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  const [theme, setTheme] = React.useState("Argentina");
+  const [language, setLanguage] = React.useState<Lang>("es");
+  const [loading, setLoading] = React.useState(false);
+  const [msg, setMsg] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault(); // evita submit GET (origen del 405)
-    setErrorMsg(null);
+  React.useEffect(() => {
+    setMsg(null);
+    setError(null);
+  }, [theme, language]);
 
-    const trimmed = theme.trim();
-    if (!trimmed) {
-      setErrorMsg("Ingresá un tema antes de generar.");
-      return;
-    }
-
+  const handleGenerate = async () => {
     setLoading(true);
+    setError(null);
+    setMsg(null);
     try {
       const res = await fetch("/api/generate-crossword", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ theme: trimmed, language }),
+        body: JSON.stringify({ theme, language, size: 9 }),
       });
 
-      const data = await safeJson<CrosswordPayload & ApiError>(res);
+      const data: unknown = await res.json();
 
-      if (!res.ok) {
-        const code = res.status;
-        const detail =
-          (data?.error || data?.message || "Error desconocido del servidor.");
-        setErrorMsg(`HTTP ${code} — ${detail}`);
+      if (!res.ok || isApiErr(data)) {
+        setError(isApiErr(data) ? data.error : `Error ${res.status}: no se pudo generar el crucigrama`);
         return;
       }
 
-      // Validación mínima para no guardar basura en sessionStorage
-      const payload: unknown = data;
-      if (
-        !isRecord(payload) ||
-        typeof payload.title !== "string" ||
-        (payload.language !== "es" && payload.language !== "en")
-      ) {
-        setErrorMsg("La respuesta del servidor no tiene el formato esperado.");
-        return;
-      }
+      const cw = data as Crossword;
 
+      // Plan A: sessionStorage
       try {
-        sessionStorage.setItem(
-          "generatedCrossword",
-          JSON.stringify(payload),
-        );
+        sessionStorage.setItem("generatedCrossword", JSON.stringify(cw));
       } catch {
-        // Si falla el storage, seguimos igual a /jugar/pro
+        // ignoramos; la preview tiene fallback
       }
 
-      router.push(`/jugar/pro?src=gen&lang=${encodeURIComponent(language)}`);
-    } catch (err: unknown) {
-      setErrorMsg(getErrorMessage(err));
+      // Extra: guardamos últimos parámetros por si la preview necesita refetch
+      try {
+        localStorage.setItem("ftc:lastTheme", theme);
+        localStorage.setItem("ftc:lastLang", language);
+      } catch {}
+
+      setMsg(cw.meta?.source ? `Generado (${String(cw.meta.source)})` : "Generado");
+
+      // Navegamos pasando theme/lang para permitir fallback en la preview
+      router.push(`/jugar/preview?theme=${encodeURIComponent(theme)}&lang=${language}`);
+    } catch {
+      setError("No se pudo contactar al endpoint.");
     } finally {
       setLoading(false);
     }
-  }
+  };
+
+  const handlePlay = () => {
+    const exists = typeof window !== "undefined" && sessionStorage.getItem("generatedCrossword");
+    if (exists) router.push("/jugar/pro?src=gen");
+    else void handleGenerate();
+  };
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8">
-      <header className="mb-6">
+    <main className="mx-auto max-w-4xl p-4 space-y-6">
+      <header>
         <h1 className="text-3xl font-bold">Generar crucigrama</h1>
-        <p className="mt-1 text-sm text-gray-500">
+        <p className="text-sm text-gray-600">
           Elegí un tema y el idioma. La IA genera un puzzle temático listo para jugar.
         </p>
       </header>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-4">
-          <div className="sm:col-span-3">
-            <label htmlFor="theme" className="mb-1 block text-sm font-medium">
-              Tema
-            </label>
+      <section className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm">Tema</span>
             <input
-              id="theme"
-              ref={inputRef}
-              type="text"
-              placeholder="Ej.: Argentina, Metallica, Energías renovables"
-              className="w-full rounded-2xl border px-4 py-2 focus:outline-none focus:ring-2 focus:ring-black/10"
               value={theme}
-              onChange={(e) => setTheme(e.target.value)}
-              disabled={loading}
+              onChange={(ev) => setTheme(ev.target.value)}
+              className="rounded-xl border px-3 py-2"
+              placeholder="Ej.: Argentina"
             />
-          </div>
+          </label>
 
-          <div className="sm:col-span-1">
-            <label
-              htmlFor="language"
-              className="mb-1 block text-sm font-medium"
-            >
-              Idioma
-            </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm">Idioma</span>
             <select
-              id="language"
-              className="w-full rounded-2xl border bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-black/10"
               value={language}
-              onChange={(e) => setLanguage(e.target.value as Language)}
-              disabled={loading}
+              onChange={(ev) => setLanguage(ev.target.value as Lang)}
+              className="rounded-xl border px-3 py-2"
             >
               <option value="es">Español (ES)</option>
-              <option value="en">English (EN)</option>
+              <option value="en">English</option>
             </select>
-          </div>
+          </label>
         </div>
 
         <div className="flex items-center gap-3">
           <button
-            type="submit"
+            onClick={handleGenerate}
             disabled={loading}
-            className="rounded-2xl bg-black px-5 py-2 text-white disabled:opacity-60"
+            className="rounded-xl px-4 py-2 bg-black text-white disabled:opacity-60"
           >
             {loading ? "Generando…" : "Generar"}
           </button>
 
-          <button
-            type="button"
-            onClick={() => router.push("/jugar/pro")}
-            className="rounded-2xl border px-5 py-2"
+        <button
+            onClick={handlePlay}
+            className="rounded-xl px-4 py-2 border bg-white"
           >
             Jugar ahora →
           </button>
         </div>
-      </form>
 
-      <div className="mt-6 grid h-40 place-items-center rounded-2xl border border-dashed text-sm text-gray-400">
+        {msg && <p className="text-green-700 text-sm">{msg}</p>}
+        {error && <p className="text-red-600 text-sm">{error}</p>}
+      </section>
+
+      <div className="mt-6 h-40 w-full rounded-xl border bg-gray-50 flex items-center justify-center text-gray-400">
         Placeholder de anuncio (rect)
       </div>
-
-      {errorMsg && (
-        <p className="mt-4 text-sm text-red-600" role="alert">
-          {errorMsg}
-        </p>
-      )}
-
-      <section className="mt-8">
-        <h2 className="mb-2 text-lg font-semibold">Sugerencias de prueba</h2>
-        <ul className="space-y-1 list-disc pl-5 text-sm text-gray-600">
-          <li>
-            Tema: <strong>Argentina</strong>, Idioma: <strong>es</strong>
-          </li>
-          <li>
-            Tema: <strong>Metallica</strong>, Idioma: <strong>en</strong>
-          </li>
-          <li>
-            Tema: <strong>Energías renovables</strong>, Idioma: <strong>es</strong>
-          </li>
-        </ul>
-      </section>
-    </div>
+    </main>
   );
 }
-// build trigger v3
