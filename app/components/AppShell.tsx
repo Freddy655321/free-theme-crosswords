@@ -2,7 +2,11 @@
 
 import React from "react";
 
-export default function AppShell({ children }: { children: React.ReactNode }) {
-  // Versión mínima: sin Consent, sin Ads, sin hooks
-  return <div className="min-h-screen">{children}</div>;
+export default function AppShell({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  // Versión segura: sin imports dinámicos, sin Consent
+  return <main className="min-h-screen">{children}</main>;
 }
