@@ -1,27 +1,21 @@
 // app/layout.tsx
 import type { Metadata } from "next";
 import "./globals.css";
-import { ConsentProvider, ConsentBanner } from "./components/Consent";
-import StickyAd from "./components/StickyAd";
+import React from "react";
+import AppShell from "./components/AppShell";
 
 export const metadata: Metadata = {
   title: "Free Theme Crosswords",
-  description: "Generá y jugá crucigramas temáticos online.",
-  robots: { index: true, follow: true },
+  description: "Crucigramas temáticos gratis — juega en web y móvil.",
+  metadataBase: new URL("https://free-theme-crosswords.vercel.app"),
+  alternates: { canonical: "/" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="es">
-      <body className="min-h-screen bg-white text-gray-900 antialiased">
-        <ConsentProvider>
-          {/* Banner de consentimiento (solo en producción y mientras esté 'unknown') */}
-          <ConsentBanner />
-          {/* Contenido de la app */}
-          <div className="pb-14">{children}</div>
-          {/* Sticky ad inferior: solo si configurás NEXT_PUBLIC_ADSENSE_SLOT_STICKY */}
-          <StickyAd />
-        </ConsentProvider>
+      <body className="bg-white text-black">
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );
