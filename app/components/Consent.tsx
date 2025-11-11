@@ -1,137 +1,71 @@
-// app/components/Consent.tsx
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React from "react";
 
-type ConsentStatus = "unknown" | "accepted" | "rejected";
+const STORAGE_KEY = "ftc:consent-v1";
 
-interface ConsentCtx {
-  status: ConsentStatus;
-  accept: () => void;
-  reject: () => void;
-  isProd: boolean;
-  clientId: string | null;
-  adsReady: boolean;
-}
+type Status = "unknown" | "accepted" | "rejected";
 
-const ConsentContext = createContext<ConsentCtx | null>(null);
+export default function Consent() {
+  const [status, setStatus] = React.useState<Status>("unknown");
+  const [mounted, setMounted] = React.useState(false);
 
-declare global {
-  interface Window {
-    adsbygoogle?: Array<Record<string, unknown>>;
-    __adsenseLoaded?: boolean;
-  }
-}
-
-const CONSENT_KEY = "ftc-consent";
-const isProdEnv = typeof process !== "undefined" && process.env.NODE_ENV === "production";
-const clientIdEnv =
-  (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_ADSENSE_CLIENT : undefined) || null;
-
-export function ConsentProvider({ children }: { children: React.ReactNode }) {
-  const [status, setStatus] = useState<ConsentStatus>("unknown");
-  const [adsReady, setAdsReady] = useState(false);
-
-  // Leer preferencia guardada
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const saved = window.localStorage.getItem(CONSENT_KEY) as ConsentStatus | null;
-    if (saved === "accepted" || saved === "rejected") setStatus(saved);
-  }, []);
-
-  // Cargar script de AdSense SOLO en producción y con consentimiento aceptado
-  const loadAdsScript = useCallback(() => {
-    if (!isProdEnv || !clientIdEnv || typeof window === "undefined") return;
-    if (window.__adsenseLoaded) {
-      setAdsReady(true);
-      return;
+  React.useEffect(() => {
+    setMounted(true);
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY) as Status | null;
+      if (saved === "accepted" || saved === "rejected") setStatus(saved);
+    } catch {
+      // si localStorage no está disponible, dejamos "unknown"
     }
-    const s = document.createElement("script");
-    s.async = true;
-    s.src = `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${encodeURIComponent(
-      clientIdEnv
-    )}`;
-    s.crossOrigin = "anonymous";
-    s.onload = () => {
-      window.adsbygoogle = window.adsbygoogle || [];
-      window.__adsenseLoaded = true;
-      setAdsReady(true);
-    };
-    s.onerror = () => setAdsReady(false);
-    document.head.appendChild(s);
   }, []);
 
-  useEffect(() => {
-    if (status === "accepted") loadAdsScript();
-  }, [status, loadAdsScript]);
-
-  const accept = useCallback(() => {
-    if (typeof window !== "undefined") window.localStorage.setItem(CONSENT_KEY, "accepted");
+  const accept = () => {
+    try {
+      localStorage.setItem(STORAGE_KEY, "accepted");
+    } catch {}
     setStatus("accepted");
-  }, []);
+  };
 
-  const reject = useCallback(() => {
-    if (typeof window !== "undefined") window.localStorage.setItem(CONSENT_KEY, "rejected");
+  const reject = () => {
+    try {
+      localStorage.setItem(STORAGE_KEY, "rejected");
+    } catch {}
     setStatus("rejected");
-  }, []);
+  };
 
-  const value = useMemo<ConsentCtx>(
-    () => ({
-      status,
-      accept,
-      reject,
-      isProd: isProdEnv,
-      clientId: clientIdEnv,
-      adsReady,
-    }),
-    [status, accept, reject, adsReady]
-  );
+  // No renderizar nada hasta hidratar (evita parpadeos) o si ya decidió
+  if (!mounted || status !== "unknown") return null;
 
-  return <ConsentContext.Provider value={value}>{children}</ConsentContext.Provider>;
-}
-
-export function useConsent() {
-  const ctx = useContext(ConsentContext);
-  if (!ctx) throw new Error("useConsent must be used within ConsentProvider");
-  return ctx;
-}
-
-export function ConsentBanner() {
-  const { status, accept, reject, isProd } = useConsent();
-
-  // En desarrollo no mostramos banner; solo en producción.
-  if (!isProd) return null;
-  if (status !== "unknown") return null;
-
+  // Estilo chip: no bloquea la pantalla, sin backdrop
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 bg-white/95 border-t border-gray-200 shadow-sm">
-      <div className="mx-auto max-w-5xl px-4 py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
-        <p className="text-sm text-gray-700">
-          Usamos cookies para personalizar contenido y medir el tráfico.{" "}
-          <a
-            href="/politica-cookies"
-            className="underline text-blue-600 hover:text-blue-700"
-          >
-            Más info
-          </a>
-          .
-        </p>
-        <div className="ml-auto flex gap-2">
-          <button
-            onClick={reject}
-            className="px-3 py-1.5 text-sm border rounded hover:bg-gray-50"
-            type="button"
-          >
-            Rechazar
-          </button>
-          <button
-            onClick={accept}
-            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
-            type="button"
-          >
-            Aceptar
-          </button>
-        </div>
+    <div
+      className="fixed bottom-4 right-4 z-50 max-w-md rounded-2xl border shadow-lg bg-white p-3 text-sm text-gray-800"
+      role="dialog"
+      aria-label="Consentimiento de cookies"
+    >
+      <p className="mb-2">
+        Usamos cookies para medir el tráfico y personalizar contenido.
+      </p>
+      <div className="flex gap-2">
+        <button
+          onClick={accept}
+          className="rounded-xl px-3 py-1.5 bg-black text-white hover:opacity-90"
+        >
+          Aceptar
+        </button>
+        <button
+          onClick={reject}
+          className="rounded-xl px-3 py-1.5 border bg-white hover:bg-gray-50"
+        >
+          Rechazar
+        </button>
+        <a
+          href="/politica-cookies"
+          className="ml-auto text-xs underline text-gray-600 hover:text-gray-800"
+        >
+          Más info
+        </a>
       </div>
     </div>
   );

@@ -288,6 +288,40 @@ function sanitizeDemo(d: Crossword): Crossword {
   };
 }
 
+/**
+ * Expande el demo 9x9 a n×n centrando el grid y rellenando con bloques (#).
+ * Luego re-deriva las entries para que coincidan con el nuevo tamaño.
+ */
+function expandDemoTo(n: number): Crossword {
+  const d = sanitizeDemo(demoBase);
+  if (n === 9) return d;
+
+  const pad = Math.floor((n - 9) / 2);
+  const grid: string[][] = Array.from({ length: n }, () =>
+    Array.from({ length: n }, () => "#")
+  );
+
+  for (let r = 0; r < 9; r++) {
+    for (let c = 0; c < 9; c++) {
+      grid[r + pad][c + pad] = d.grid[r][c];
+    }
+  }
+
+  const entries = deriveEntriesFromGrid(grid, 3).map((e) => ({
+    ...e,
+    clue: d.entries.find((x) => x.row === e.row - pad && x.col === e.col - pad && x.answer === e.answer)?.clue ?? "Pista temática.",
+  }));
+
+  return {
+    theme: d.theme,
+    language: d.language,
+    size: n,
+    grid,
+    entries,
+    meta: { source: "demo-expanded" },
+  };
+}
+
 // ---------- Handler ----------
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
@@ -308,8 +342,8 @@ export async function POST(req: NextRequest) {
 
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.5,
-      max_tokens: 2000,
+      temperature: 0.2,
+      max_tokens: 3500,
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: "Sos un constructor de crucigramas estricto. Devolvés SOLO JSON válido." },
@@ -344,22 +378,22 @@ export async function POST(req: NextRequest) {
   };
 
   try {
-    // 1) Intento libre
-    const free = await tryGenerate(makeFreePrompt(theme, language, n));
-    if (free) return NextResponse.json({ ...free, meta: { source: "openai" } });
-
-    // 2) Intento estricto
+    // Intento estricto primero para forzar JSON correcto
     const strict = await tryGenerate(makeStrictPrompt(theme, language, n));
     if (strict) return NextResponse.json({ ...strict, meta: { source: "openai" } });
 
-    // 3) Fallback demo curado (siempre 200)
-    const clean = sanitizeDemo(demoBase);
-    return NextResponse.json(clean, { status: 200 });
+    // Intento libre
+    const free = await tryGenerate(makeFreePrompt(theme, language, n));
+    if (free) return NextResponse.json({ ...free, meta: { source: "openai" } });
+
+    // Fallback demo pero respetando el tamaño pedido
+    const demo = expandDemoTo(n);
+    return NextResponse.json(demo, { status: 200 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "unknown";
-    const clean = sanitizeDemo(demoBase);
+    const demo = expandDemoTo(n);
     return NextResponse.json(
-      { ...clean, meta: { source: "fallback", error: message } },
+      { ...demo, meta: { ...(demo.meta ?? {}), source: "fallback", error: message } },
       { status: 200 }
     );
   }
