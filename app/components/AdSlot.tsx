@@ -1,57 +1,34 @@
-// app/components/AdSlot.tsx
-"use client";
+'use client';
 
-import { useEffect, useRef } from "react";
-import { useConsent } from "./Consent";
+import { useRef } from 'react';
+import { usePathname } from 'next/navigation';
 
 type Props = {
-  /** Slot numérico asignado por AdSense, ej.: "1234567890" */
-  slot: string;
-  /** width/height inline si querés forzar tamaños; si se omite, usa responsive auto */
-  style?: React.CSSProperties;
-  className?: string;
-  /** formato adsense */
-  format?: "auto" | "fluid" | "rectangle";
-  /** responsive */
-  responsive?: boolean;
+  /** Formato visual del placeholder (solo decorativo por ahora) */
+  format?: 'rect' | 'banner' | 'square';
 };
 
-export default function AdSlot({
-  slot,
-  style,
-  className,
-  format = "auto",
-  responsive = true,
-}: Props) {
-  const { status, isProd, adsReady, clientId } = useConsent();
-  const insRef = useRef<HTMLModElement | null>(null);
+/**
+ * AdSlot (placeholder)
+ * - Sin lógica de consentimiento ni carga de scripts.
+ * - No se muestra en la vista de QA (/jugar/preview).
+ * - Mantiene un placeholder visualmente neutro.
+ */
+export default function AdSlot({ format = 'rect' }: Props) {
+  const pathname = usePathname();
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const canShow = isProd && status === "accepted" && adsReady && !!clientId;
-
-  useEffect(() => {
-    if (!canShow) return;
-    if (typeof window === "undefined") return;
-
-    try {
-      // Usa la declaración global definida en Consent.tsx (no redeclaramos acá)
-      window.adsbygoogle = window.adsbygoogle || [];
-      window.adsbygoogle.push({});
-    } catch {
-      // silencioso: si falla no rompemos la UI
-    }
-  }, [canShow, slot, format, responsive]);
-
-  if (!canShow) return null;
+  // Ocultamos el slot en la vista de QA
+  const isPreview = pathname?.startsWith('/jugar/preview') ?? false;
+  if (isPreview) return null;
 
   return (
-    <ins
-      ref={insRef}
-      className={`adsbygoogle block ${className ?? ""}`}
-      style={style ?? { display: "block" }}
-      data-ad-client={clientId!}
-      data-ad-slot={slot}
-      data-ad-format={format}
-      data-full-width-responsive={responsive ? "true" : "false"}
-    />
+    <div
+      ref={containerRef}
+      aria-hidden
+      className="rounded-xl border border-dashed border-zinc-300 text-zinc-400 text-sm grid place-items-center h-40"
+    >
+      Placeholder de anuncio ({format})
+    </div>
   );
 }
