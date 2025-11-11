@@ -1,30 +1,20 @@
-// app/components/HouseAd.tsx
 "use client";
-
-import { useConsent } from "./Consent";
 
 type Kind = "leader" | "rect" | "square";
 
+/**
+ * Versión neutra de HouseAd: no importa Consent ni carga ads.
+ * Renderiza un placeholder liviano que NO bloquea el build.
+ */
 export default function HouseAd({ kind = "rect" }: { kind?: Kind }) {
-  const { isProd, status } = useConsent();
-
-  // Si estamos en producción con consentimiento aceptado,
-  // no mostramos placeholder (el AdSlot real se encargará).
-  if (isProd && status === "accepted") return null;
-
-  const size =
-    kind === "leader"
-      ? "h-16"
-      : kind === "square"
-      ? "h-40"
-      : "h-32"; // rect por defecto
+  const ratio =
+    kind === "leader" ? "6 / 1" : kind === "square" ? "1 / 1" : "4 / 3";
 
   return (
     <div
-      className={`border border-dashed rounded ${size} w-full flex items-center justify-center text-sm text-gray-500 bg-gray-50`}
-      role="img"
-      aria-label="Espacio publicitario de prueba (placeholder)"
-      title="Placeholder visible en desarrollo o sin consentimiento"
+      aria-hidden
+      className="w-full rounded-xl border border-dashed border-gray-300 text-gray-400 text-sm grid place-items-center"
+      style={{ aspectRatio: ratio }}
     >
       Placeholder de anuncio ({kind})
     </div>

@@ -1,34 +1,16 @@
-'use client';
-
-import { useRef } from 'react';
-import { usePathname } from 'next/navigation';
-
-type Props = {
-  /** Formato visual del placeholder (solo decorativo por ahora) */
-  format?: 'rect' | 'banner' | 'square';
-};
+"use client";
 
 /**
- * AdSlot (placeholder)
- * - Sin lógica de consentimiento ni carga de scripts.
- * - No se muestra en la vista de QA (/jugar/preview).
- * - Mantiene un placeholder visualmente neutro.
+ * Versión neutra de AdSlot: sin Consent ni scripts de ads.
  */
-export default function AdSlot({ format = 'rect' }: Props) {
-  const pathname = usePathname();
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Ocultamos el slot en la vista de QA
-  const isPreview = pathname?.startsWith('/jugar/preview') ?? false;
-  if (isPreview) return null;
-
+export default function AdSlot() {
   return (
     <div
-      ref={containerRef}
       aria-hidden
-      className="rounded-xl border border-dashed border-zinc-300 text-zinc-400 text-sm grid place-items-center h-40"
+      className="w-full rounded-xl border border-dashed border-gray-300 text-gray-400 text-xs grid place-items-center"
+      style={{ aspectRatio: "4 / 3" }}
     >
-      Placeholder de anuncio ({format})
+      Placeholder de anuncio
     </div>
   );
 }
