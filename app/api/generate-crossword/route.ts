@@ -4,6 +4,7 @@ import OpenAI from "openai";
 
 export const runtime = "nodejs";
 
+// ---------- Tipos ----------
 type Direction = "across" | "down";
 
 interface Entry {
@@ -11,7 +12,7 @@ interface Entry {
   row: number; // 0-index
   col: number; // 0-index
   direction: Direction;
-  answer: string; // A–Z (ASCII), sin espacios, len >= 3 en fallback
+  answer: string; // A–Z (ASCII), sin espacios
   clue: string;
 }
 
@@ -24,9 +25,20 @@ interface Crossword {
   meta?: Record<string, unknown>;
 }
 
-// ---------- Utilidades ----------
+interface Validation {
+  ok: boolean;
+  problems: string[];
+}
+
+// ---------- Util ----------
 const AtoZ = /^[A-ZÑÁÉÍÓÚÜ]+$/u;
 const isBlock = (c: string) => c === "#";
+
+const log =
+  (...args: unknown[]) =>
+    (process.env.NODE_ENV !== "production" || process.env.VERCEL_ENV === "development")
+      ? console.log("[api/generate]", ...args)
+      : undefined;
 
 function normalizeAnswer(s: string) {
   return s
@@ -110,7 +122,7 @@ function deriveEntriesFromGrid(grid: string[][], minLen = 3): Entry[] {
   return entries;
 }
 
-function validateCrossword(x: Crossword) {
+function validateCrossword(x: Crossword): Validation {
   const problems: string[] = [];
   if (!x || !Array.isArray(x.grid) || !Array.isArray(x.entries)) {
     problems.push("Estructura base inválida.");
@@ -230,11 +242,6 @@ Idioma de las pistas: ${lang}.
 }
 
 // ---------- DEMO curado (9x9) ----------
-/**
- * Grid pensado para:
- * Across válidos: MATE, AND, BOCA, RIOS, PAMPA, NEUQUEN, SALTA, OBELISCO, AND, MAR, TANGO, UVA, PAT, RIO
- * Down válidos (ejemplos): MBAPNST#, AONA..., etc. (la validación en fallback solo muestra >=3)
- */
 const demoBase: Crossword = {
   theme: "Argentina",
   language: "es",
@@ -255,7 +262,6 @@ const demoBase: Crossword = {
 };
 
 function sanitizeDemo(d: Crossword): Crossword {
-  // Derivar entries desde el grid y filtrar < 3
   const derived = deriveEntriesFromGrid(d.grid, 3).map((e) => {
     const clueDict: Record<string, string> = {
       MATE: "Infusión tradicional argentina.",
@@ -309,7 +315,13 @@ function expandDemoTo(n: number): Crossword {
 
   const entries = deriveEntriesFromGrid(grid, 3).map((e) => ({
     ...e,
-    clue: d.entries.find((x) => x.row === e.row - pad && x.col === e.col - pad && x.answer === e.answer)?.clue ?? "Pista temática.",
+    clue:
+      d.entries.find(
+        (x) =>
+          x.row === e.row - pad &&
+          x.col === e.col - pad &&
+          x.answer === e.answer
+      )?.clue ?? "Pista temática.",
   }));
 
   return {
@@ -366,30 +378,32 @@ export async function POST(req: NextRequest) {
     }));
     parsed.entries = parsed.entries.map((e) => ensureClueQuality(e, language));
 
-    let check = validateCrossword(parsed);
+    let check: Validation = validateCrossword(parsed);
+    log("VALIDATE#1", { ok: check.ok, problems: check.problems.slice(0, 10) });
     if (check.ok) return parsed;
 
     // Re-derivar desde grid (y filtrar <3)
-    const red = { ...parsed, entries: deriveEntriesFromGrid(parsed.grid, 3) };
+    const red: Crossword = { ...parsed, entries: deriveEntriesFromGrid(parsed.grid, 3) };
     check = validateCrossword(red);
+    log("VALIDATE#2_AFTER_DERIVE", { ok: check.ok, problems: check.problems.slice(0, 10) });
     if (check.ok) return red;
 
     return null;
   };
 
   try {
-    // Intento estricto primero para forzar JSON correcto
+    // Estricto primero
     const strict = await tryGenerate(makeStrictPrompt(theme, language, n));
     if (strict) return NextResponse.json({ ...strict, meta: { source: "openai" } });
 
-    // Intento libre
+    // Libre
     const free = await tryGenerate(makeFreePrompt(theme, language, n));
     if (free) return NextResponse.json({ ...free, meta: { source: "openai" } });
 
-    // Fallback demo pero respetando el tamaño pedido
+    // Fallback que respeta tamaño
     const demo = expandDemoTo(n);
     return NextResponse.json(demo, { status: 200 });
-  } catch (err: unknown) {
+  } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";
     const demo = expandDemoTo(n);
     return NextResponse.json(
