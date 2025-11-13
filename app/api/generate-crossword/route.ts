@@ -11,7 +11,7 @@ interface Entry {
   row: number; // 0-index
   col: number; // 0-index
   direction: Direction;
-  answer: string; // A–Z (ASCII), sin espacios, len >= 3 en fallback
+  answer: string; // A–Z (ASCII), sin espacios
   clue: string;
 }
 
@@ -24,13 +24,15 @@ interface Crossword {
   meta?: Record<string, unknown>;
 }
 
-/* -------------------- Utilidades -------------------- */
+// ---------- Utilidades básicas ----------
+
 const AtoZ = /^[A-ZÑÁÉÍÓÚÜ]+$/u;
 const isBlock = (c: string) => c === "#";
 
-function normalizeAnswer(s: unknown) {
-  if (typeof s !== "string") return "";
+function normalizeAnswer(s: string | undefined | null): string {
+  if (!s) return "";
   return s
+    .toString()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
@@ -45,6 +47,10 @@ function safeJson<T = unknown>(text: string): T | null {
   }
 }
 
+/**
+ * Deriva entries a partir del grid, útil como último recurso cuando
+ * el modelo no manda una lista decente de entradas.
+ */
 function deriveEntriesFromGrid(grid: string[][], minLen = 3): Entry[] {
   const n = grid.length;
   const entries: Entry[] = [];
@@ -54,11 +60,14 @@ function deriveEntriesFromGrid(grid: string[][], minLen = 3): Entry[] {
   for (let r = 0; r < n; r++) {
     let c = 0;
     while (c < n) {
-      if (!isBlock(grid[r][c]) && (c === 0 || isBlock(grid[r][c - 1]))) {
+      const cell = grid[r]?.[c] ?? "#";
+      const prev = grid[r]?.[c - 1] ?? "#";
+
+      if (!isBlock(cell) && (c === 0 || isBlock(prev))) {
         let end = c;
         let ans = "";
-        while (end < n && !isBlock(grid[r][end])) {
-          ans += grid[r][end];
+        while (end < n && !isBlock(grid[r]?.[end] ?? "#")) {
+          ans += grid[r]?.[end] ?? "#";
           end++;
         }
         const norm = normalizeAnswer(ans);
@@ -69,7 +78,7 @@ function deriveEntriesFromGrid(grid: string[][], minLen = 3): Entry[] {
             col: c,
             direction: "across",
             answer: norm,
-            clue: "",
+            clue: "Thematic clue.",
           });
         }
         c = end + 1;
@@ -83,11 +92,14 @@ function deriveEntriesFromGrid(grid: string[][], minLen = 3): Entry[] {
   for (let c = 0; c < n; c++) {
     let r = 0;
     while (r < n) {
-      if (!isBlock(grid[r][c]) && (r === 0 || isBlock(grid[r - 1][c]))) {
+      const cell = grid[r]?.[c] ?? "#";
+      const prev = grid[r - 1]?.[c] ?? "#";
+
+      if (!isBlock(cell) && (r === 0 || isBlock(prev))) {
         let end = r;
         let ans = "";
-        while (end < n && !isBlock(grid[end][c])) {
-          ans += grid[end][c];
+        while (end < n && !isBlock(grid[end]?.[c] ?? "#")) {
+          ans += grid[end]?.[c] ?? "#";
           end++;
         }
         const norm = normalizeAnswer(ans);
@@ -98,7 +110,7 @@ function deriveEntriesFromGrid(grid: string[][], minLen = 3): Entry[] {
             col: c,
             direction: "down",
             answer: norm,
-            clue: "",
+            clue: "Thematic clue.",
           });
         }
         r = end + 1;
@@ -111,137 +123,92 @@ function deriveEntriesFromGrid(grid: string[][], minLen = 3): Entry[] {
   return entries;
 }
 
-function validateCrossword(x: Crossword) {
-  const problems: string[] = [];
-  if (!x || !Array.isArray(x.grid) || !Array.isArray(x.entries)) {
-    problems.push("Estructura base inválida.");
-    return { ok: false, problems };
-  }
-  const n = x.grid.length;
-  if (n < 9 || n > 13) problems.push("size fuera de rango [9..13].");
-
-  for (const row of x.grid) {
-    if (!Array.isArray(row) || row.length !== n) {
-      problems.push("Grid no es NxN.");
-      break;
-    }
-    for (const cell of row) {
-      const good =
-        typeof cell === "string" &&
-        (isBlock(cell) || AtoZ.test(normalizeAnswer(cell)));
-      if (!good) {
-        problems.push("Grid contiene celdas inválidas.");
-        break;
-      }
-    }
-  }
-
-  const seen = new Set<string>();
-  let across = 0;
-  let down = 0;
-
-  for (const e of x.entries) {
-    if ((e.answer ?? "").length < 2) problems.push(`Entrada #${e.number} < 2 letras.`);
-    if (!AtoZ.test(e.answer ?? "")) problems.push(`Entrada #${e.number} con caracteres inválidos.`);
-    if (e.direction === "across") across++;
-    else if (e.direction === "down") down++;
-
-    const sig = `${e.direction}@${e.row},${e.col}`;
-    if (seen.has(sig)) problems.push(`Entrada duplicada en ${sig}.`);
-    seen.add(sig);
-
-    for (let k = 0; k < (e.answer?.length ?? 0); k++) {
-      const rr = e.row + (e.direction === "down" ? k : 0);
-      const cc = e.col + (e.direction === "across" ? k : 0);
-      if (rr >= n || cc >= n) {
-        problems.push(`Entrada #${e.number} se sale del grid.`);
-        break;
-      }
-      const cell = x.grid[rr][cc];
-      if (isBlock(cell)) {
-        problems.push(`Entrada #${e.number} atraviesa bloque.`);
-        break;
-      }
-    }
-  }
-
-  const total = across + down;
-  if (total < 18 && n === 9) problems.push("Muy pocas entradas (min 18 para 9x9).");
-  if (total < 24 && n === 11) problems.push("Muy pocas entradas (min 24 para 11x11).");
-  if (total < 30 && n === 13) problems.push("Muy pocas entradas (min 30 para 13x13).");
-  const diff = Math.abs(across - down);
-  if (total > 0 && diff / total > 0.35) problems.push("Desbalance entre across/down.");
-
-  const trivial = x.entries.filter((e) => /\b(letra|vocal|consonante)\b/i.test(e.clue));
-  if (trivial.length > 4) problems.push("Demasiadas pistas triviales.");
-
-  return { ok: problems.length === 0, problems };
-}
-
-function ensureClueQuality(e: Entry, language: "es" | "en"): Entry {
-  if (language === "es") {
-    if (e.answer === "MENDOZA" && /regi(o|ó)n/i.test(e.clue)) {
-      return { ...e, clue: "Provincia argentina famosa por su vino." };
-    }
-  } else {
-    if (e.answer === "MENDOZA" && /region/i.test(e.clue)) {
-      return { ...e, clue: "Argentine province famous for wine." };
-    }
-  }
-  return e;
-}
-
-/* -------------------- Prompts -------------------- */
-function makeStrictPrompt(theme: string, language: "es" | "en", size: number) {
-  const langLine =
-    language === "es"
-      ? `Escribe pistas sólidas en español rioplatense.`
-      : `Write solid, natural English clues.`;
-
-  return `
-TAREA: Diseñar un crucigrama ${size}x${size} sobre el tema "${theme}".
-REQUISITOS ESTRICTOS:
-- Devuelve SOLO JSON (sin texto extra): theme, language, size, grid, entries, meta.
-- Grid ${size}x${size} con letras A–Z (ASCII) o "#".
-- Todas las entries con longitud mínima 2 (prohibido 1 letra).
-- Mínimos: 18 (9x9), 24 (11x11), 30 (13x13). Balance across/down (diferencia ≤35%).
-- Evita pistas triviales tipo “letra/vocal/consonante”.
-- Answers en mayúsculas, sin espacios ni guiones.
-- Cada entry debe calzar exacto en el grid; no atravieses "#".
-- Estética similar a crucigramas del NYT.
-
-${langLine}
-
-FORMATO JSON:
-{
-  "theme": "${theme}",
-  "language": "${language}",
-  "size": ${size},
-  "grid": string[${size}][${size}],
-  "entries": [
-    { "number": 1, "row": 0, "col": 0, "direction": "across", "answer": "EJEMPLO", "clue": "Pista clara y específica." }
-  ],
-  "meta": { "source": "openai" }
-}
-`;
-}
-
-function makeFreePrompt(theme: string, language: "es" | "en", size: number) {
-  const lang = language === "es" ? "español rioplatense" : "English";
-  return `
-Generá un crucigrama ${size}x${size} sobre "${theme}".
-- Devolvé SOLO JSON con (theme, language, size, grid, entries, meta).
-- Evitá respuestas de 1 letra y pistas triviales. Balanceá across y down.
-- Respuestas en mayúsculas sin espacios (A-Z).
-Idioma de las pistas: ${lang}.
-`;
-}
-
-/* -------------------- DEMO 9x9 -------------------- */
 /**
- * Grid pensado para:
- * Across válidos: MATE, AND, BOCA, RIOS, PAMPA, NEUQUEN, SALTA, OBELISCO, AND, MAR, TANGO, UVA, PAT, RIO
+ * Limpia y normaliza un crossword devuelto por el modelo.
+ * Regla de oro ahora: solo rechazamos si la estructura es *muy* inválida.
  */
+function normalizeCrossword(
+  raw: Partial<Crossword>,
+  theme: string,
+  language: "es" | "en",
+  requestedSize: number
+): Crossword | null {
+  if (!raw || !Array.isArray(raw.grid) || raw.grid.length === 0) {
+    return null;
+  }
+
+  // Forzar tamaño cuadrado NxN
+  const n = Math.min(13, Math.max(9, requestedSize || raw.size || raw.grid.length));
+  const grid: string[][] = Array.from({ length: n }, (_, r) => {
+    const row = Array.isArray(raw.grid?.[r]) ? (raw.grid as unknown as string[][])[r] : [];
+    const padded = Array.from({ length: n }, (_, c) => {
+      const cell = row[c];
+      if (typeof cell === "string" && cell.length > 0) {
+        return cell.length === 1 ? cell.toUpperCase() : cell[0].toUpperCase();
+      }
+      return "#";
+    });
+    return padded;
+  });
+
+  // Normalizar entries o derivarlas
+  let entries: Entry[] = Array.isArray(raw.entries)
+    ? (raw.entries as Entry[])
+    : [];
+
+  entries = entries
+    .map((e, idx) => {
+      const dir: Direction = e.direction === "down" ? "down" : "across";
+      const ans = normalizeAnswer(e.answer);
+      const row = Number(e.row) || 0;
+      const col = Number(e.col) || 0;
+
+      if (
+        row < 0 ||
+        col < 0 ||
+        row >= n ||
+        col >= n ||
+        ans.length < 2
+      ) {
+        return null;
+      }
+
+      return {
+        number: e.number ?? idx + 1,
+        row,
+        col,
+        direction: dir,
+        answer: ans,
+        clue: (e.clue ?? "").toString().trim() || "Thematic clue.",
+      };
+    })
+    .filter((e): e is Entry => !!e);
+
+  // Si después de limpiar quedan muy pocas, derivamos desde el grid
+  if (entries.length < 10) {
+    entries = deriveEntriesFromGrid(grid, 3);
+  }
+
+  if (entries.length === 0) {
+    // Esto sí es fallo duro -> forzamos fallback
+    return null;
+  }
+
+  return {
+    theme,
+    language,
+    size: n,
+    grid,
+    entries,
+    meta: {
+      source: "openai-clean",
+      ...(raw.meta ?? {}),
+    },
+  };
+}
+
+// ---------- DEMO curado (9x9) ----------
+
 const demoBase: Crossword = {
   theme: "Argentina",
   language: "es",
@@ -261,68 +228,45 @@ const demoBase: Crossword = {
   meta: { source: "demo" },
 };
 
-const esClues: Record<string, string> = {
-  MATE: "Infusión tradicional argentina.",
-  AND: "Conjunción; acá se usa como cruce, sin pista.",
-  BOCA: "Club xeneize de Buenos Aires.",
-  RIOS: "Cuerpos de agua importantes del país.",
-  PAMPA: "Gran llanura argentina.",
-  NEUQUEN: "Provincia patagónica y su capital homónimas.",
-  SALTA: "Provincia del noroeste, famosa por sus vinos.",
-  OBELISCO: "Icono porteño sobre la 9 de Julio.",
-  MAR: "El Atlántico baña su costa.",
-  TANGO: "Baile y música emblema nacional.",
-  UVA: "Fruto base de muchos vinos argentinos.",
-  PAT: "Abreviatura coloquial; cruce técnico.",
-  RIO: "Curso de agua.",
-};
+function sanitizeDemo(d: Crossword): Crossword {
+  const derived = deriveEntriesFromGrid(d.grid, 3);
+  const clueDict: Record<string, string> = {
+    MATE: "Infusión tradicional argentina.",
+    AND: "Conjunción; acá se usa como cruce, sin pista.",
+    BOCA: "Club xeneize de Buenos Aires.",
+    RIOS: "Cuerpos de agua importantes del país.",
+    PAMPA: "Gran llanura argentina.",
+    NEUQUEN: "Provincia patagónica y su capital homónimas.",
+    SALTA: "Provincia del noroeste, famosa por sus vinos.",
+    OBELISCO: "Icono porteño sobre la 9 de Julio.",
+    MAR: "El Atlántico baña su costa.",
+    TANGO: "Baile y música emblema nacional.",
+    UVA: "Fruto base de muchos vinos argentinos.",
+    PAT: "Abreviatura coloquial; cruce técnico.",
+    RIO: "Curso de agua.",
+  };
 
-const enClues: Record<string, string> = {
-  MATE: "Traditional Argentine infusion.",
-  AND: "Conjunction; used here only as a crossing.",
-  BOCA: "Famous Buenos Aires football club.",
-  RIOS: "Important waterways of the country.",
-  PAMPA: "Vast Argentine plain.",
-  NEUQUEN: "Patagonian province and its capital share this name.",
-  SALTA: "Northwestern province known for its wines.",
-  OBELISCO: "Icon on Buenos Aires’ 9 de Julio Ave.",
-  MAR: "The Atlantic washes its coast.",
-  TANGO: "Argentina’s emblematic music and dance.",
-  UVA: "Fruit behind many Argentine wines.",
-  PAT: "Colloquial abbr.; technical crossing.",
-  RIO: "River.",
-};
-
-function sanitizeDemo(language: "es" | "en"): Crossword {
-  // Derivar entries desde el grid y filtrar < 3; mapear pistas por idioma
-  const derived = deriveEntriesFromGrid(demoBase.grid, 3).map((e) => {
-    const dict = language === "en" ? enClues : esClues;
-    return {
-      ...e,
-      clue: dict[e.answer] ?? (language === "en" ? "Thematic clue." : "Pista temática."),
-    };
-  });
+  const entries = derived.map((e) => ({
+    ...e,
+    clue: clueDict[e.answer] ?? "Pista temática.",
+  }));
 
   return {
-    theme: demoBase.theme,
-    language,
-    size: demoBase.size,
-    grid: demoBase.grid,
-    entries: derived,
+    theme: "Argentina",
+    language: "es",
+    size: d.size,
+    grid: d.grid,
+    entries,
     meta: { source: "demo-clean" },
   };
 }
 
 /**
- * Expande el demo 9x9 a n×n centrando el grid y rellenando con bloques (#),
- * re-deriva las entries y aplica pistas en el idioma pedido.
- * Además inyecta SIEMPRE { theme, language } solicitados.
+ * Expande el demo 9x9 a n×n centrando el grid y rellenando con bloques (#).
  */
-function expandDemoTo(n: number, theme: string, language: "es" | "en"): Crossword {
-  const d = sanitizeDemo(language);
-  if (n === 9) {
-    return { ...d, theme, language, size: 9 }; // respeta theme/lang pedidos
-  }
+function expandDemoTo(n: number): Crossword {
+  const d = sanitizeDemo(demoBase);
+  if (n === 9) return d;
 
   const pad = Math.floor((n - 9) / 2);
   const grid: string[][] = Array.from({ length: n }, () =>
@@ -335,25 +279,18 @@ function expandDemoTo(n: number, theme: string, language: "es" | "en"): Crosswor
     }
   }
 
-  const dict = language === "en" ? enClues : esClues;
-  const baseDerived = deriveEntriesFromGrid(d.grid, 3);
-
-  const entries = deriveEntriesFromGrid(grid, 3).map((e) => {
-    // Intentamos conservar la pista si coincide con la misma palabra desplazada
-    const original = baseDerived.find(
-      (x) => x.answer === e.answer
-    );
-    const clue =
-      (original && dict[original.answer]) ??
-      dict[e.answer] ??
-      (language === "en" ? "Thematic clue." : "Pista temática.");
-
-    return { ...e, clue };
-  });
+  const entries = deriveEntriesFromGrid(grid, 3).map((e) => ({
+    ...e,
+    clue:
+      d.entries.find(
+        (x) =>
+          x.answer === e.answer // mantenemos las pistas originales cuando coinciden
+      )?.clue ?? "Pista temática.",
+  }));
 
   return {
-    theme,
-    language,
+    theme: d.theme,
+    language: d.language,
     size: n,
     grid,
     entries,
@@ -361,7 +298,44 @@ function expandDemoTo(n: number, theme: string, language: "es" | "en"): Crosswor
   };
 }
 
-/* -------------------- Handler -------------------- */
+// ---------- Prompts ----------
+
+function makePrompt(theme: string, language: "es" | "en", size: number) {
+  const langLine =
+    language === "es"
+      ? `Escribe pistas claras en español rioplatense.`
+      : `Write clear clues in natural English.`;
+
+  return `
+You are an expert crossword constructor.
+
+TASK: Create a ${size}x${size} crossword about the theme "${theme}".
+
+HARD RULES:
+- Reply with JSON ONLY, no prose.
+- JSON keys: theme, language, size, grid, entries, meta.
+- "grid" must be a ${size}x${size} matrix of strings: A–Z or "#".
+- Answers must be UPPERCASE, no spaces or hyphens.
+- Avoid 1-letter answers when possible.
+
+${langLine}
+
+JSON FORMAT EXAMPLE:
+{
+  "theme": "${theme}",
+  "language": "${language}",
+  "size": ${size},
+  "grid": [["#", "A", ...], ...],
+  "entries": [
+    { "number": 1, "row": 0, "col": 0, "direction": "across", "answer": "EXAMPLE", "clue": "Clear, specific clue." }
+  ],
+  "meta": { "source": "openai" }
+}
+`;
+}
+
+// ---------- Handler ----------
+
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
     theme?: string;
@@ -369,70 +343,60 @@ export async function POST(req: NextRequest) {
     size?: number;
   };
 
-  const theme = (body.theme && String(body.theme).trim()) || "Argentina";
-  const language = (body.language === "en" ? "en" : "es") as "es" | "en";
+  const theme = body.theme || "Argentina";
+  const language = body.language || "es";
   const n = Math.min(13, Math.max(9, Number(body.size) || 9));
 
   const apiKey = process.env.OPENAI_API_KEY;
   const client = apiKey ? new OpenAI({ apiKey }) : null;
 
-  const tryGenerate = async (prompt: string): Promise<Crossword | null> => {
-    if (!client) return null;
+  // Si no hay clave, vamos directo al demo
+  if (!client) {
+    const demo = expandDemoTo(n);
+    return NextResponse.json(demo, { status: 200 });
+  }
 
+  try {
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.2,
+      temperature: 0.3,
       max_tokens: 3500,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: "Sos un constructor de crucigramas estricto. Devolvés SOLO JSON válido." },
-        { role: "user", content: prompt },
+        {
+          role: "system",
+          content: "Sos un constructor de crucigramas. Devolvés SOLO JSON válido.",
+        },
+        { role: "user", content: makePrompt(theme, language, n) },
       ],
     });
 
-    const raw = completion.choices?.[0]?.message?.content ?? "";
-    const parsed = safeJson<Crossword>(raw);
-    if (!parsed) return null;
+    const rawContent = completion.choices?.[0]?.message?.content ?? "";
+    const parsed = safeJson<Partial<Crossword>>(rawContent);
 
-    parsed.language = language;
-    parsed.size = Math.min(13, Math.max(9, parsed.size || n));
-    parsed.theme = theme;
+    const normalized = normalizeCrossword(parsed || {}, theme, language, n);
 
-    parsed.entries = (parsed.entries || []).map((e) => ({
-      ...e,
-      answer: normalizeAnswer(e.answer),
-      clue: typeof e.clue === "string" ? e.clue.trim() : "",
-    }));
-    parsed.entries = parsed.entries.map((e) => ensureClueQuality(e, language));
+    if (normalized) {
+      return NextResponse.json(normalized, { status: 200 });
+    }
 
-    let check = validateCrossword(parsed);
-    if (check.ok) return parsed;
-
-    // Re-derivar desde grid (y filtrar <3)
-    const red = { ...parsed, entries: deriveEntriesFromGrid(parsed.grid, 3) };
-    check = validateCrossword(red);
-    if (check.ok) return red;
-
-    return null;
-  };
-
-  try {
-    // 1) Intento estricto primero
-    const strict = await tryGenerate(makeStrictPrompt(theme, language, n));
-    if (strict) return NextResponse.json({ ...strict, meta: { source: "openai" } });
-
-    // 2) Intento libre
-    const free = await tryGenerate(makeFreePrompt(theme, language, n));
-    if (free) return NextResponse.json({ ...free, meta: { source: "openai" } });
-
-    // 3) Fallback demo respetando SIEMPRE tema/idioma/tamaño solicitados
-    const demo = expandDemoTo(n, theme, language);
-    return NextResponse.json(demo, { status: 200 });
+    // Si llegamos acá, el JSON era demasiado roto ⇒ demo
+    const demo = expandDemoTo(n);
+    return NextResponse.json(demo, {
+      status: 200,
+    });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "unknown";
-    const demo = expandDemoTo(n, theme, language);
+    const demo = expandDemoTo(n);
     return NextResponse.json(
-      { ...demo, meta: { ...(demo.meta ?? {}), source: "fallback", error: message } },
+      {
+        ...demo,
+        meta: {
+          ...(demo.meta ?? {}),
+          source: "fallback",
+          error:
+            err instanceof Error ? err.message : "unknown error in generate-crossword",
+        },
+      },
       { status: 200 }
     );
   }
