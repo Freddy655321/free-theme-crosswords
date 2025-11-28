@@ -383,7 +383,82 @@ if (across === 0 || down === 0) return true;
 return false;
 }
 
-// ---------- STUBS DE TEMA (para que compile) ----------
+// ---------- Theme anchors ----------
+
+type LocalizedClue = { en: string; es: string };
+type LocalizedClueMap = Record<string, LocalizedClue>; // (reservado para futuro)
+
+const THEME_ANCHORS: Record<string, string[]> = {
+"metal music": [
+"THRASH",
+"DOOM",
+"BLACKMETAL",
+"DEATHMETAL",
+"METALCORE",
+"MOSH",
+"MOSHPIT",
+"HEADBANG",
+"RIFF",
+"DOUBLEBASS",
+"METALLICA",
+"SLAYER",
+"MEGADETH",
+"PANTERA",
+"IRONMAIDEN",
+"BLACKSABBATH",
+"MASTEROFPUPPETS",
+"REIGNINBLOOD",
+"RUSTINPEACE",
+"GIG",
+"STAGE",
+"TOUR",
+"BASS",
+"DRUMS",
+"TEMPO",
+"LOUD",
+"CROWD",
+"ALBUM",
+],
+
+argentina: [
+"TANGO",
+"MATE",
+"PAMPA",
+"GAUCHO",
+"ASADO",
+"BARRIO",
+"BANDONEON",
+"OBELISCO",
+"MALBEC",
+"PATAGONIA",
+"LITORAL",
+"CHORIPAN",
+"OMBU",
+"BUENOSAIRES",
+"ROSARIO",
+"TIGRE",
+"IGUAZU",
+"MENDOZA",
+"CORDOBA",
+"SALTA",
+],
+};
+
+function getThemeAnchors(theme: string): string[] {
+const key = theme.toLowerCase();
+if (THEME_ANCHORS[key]) return THEME_ANCHORS[key];
+
+if (key.includes("metal") && key.includes("music")) {
+return THEME_ANCHORS["metal music"];
+}
+if (key.includes("argentina")) {
+return THEME_ANCHORS["argentina"];
+}
+
+return [];
+}
+
+// ---------- STUBS / overrides de tema ----------
 
 function getThemeClueOverrides(
 theme: string
@@ -444,19 +519,92 @@ TANGO: {
 es: "Género musical y baile nacido en el Río de la Plata.",
 en: "Music and dance genre born in the Río de la Plata region.",
 },
+BUENOSAIRES: {
+es: "Capital de Argentina, a orillas del Río de la Plata.",
+en: "Capital of Argentina, on the Río de la Plata.",
+},
+ROSARIO: {
+es: "Importante ciudad portuaria a orillas del Paraná.",
+en: "Major port city on the Paraná River.",
+},
+TIGRE: {
+es: "Ciudad del delta del Paraná, destino de fin de semana.",
+en: "City in the Paraná delta, popular weekend destination.",
+},
+IGUAZU: {
+es: "Famosas cataratas en la frontera norte de Argentina.",
+en: "Famous waterfalls on Argentina's northern border.",
+},
 };
 }
 
 return {};
 }
 
-// Versión simplificada: no marcamos ninguna respuesta como "claramente fuera de tema".
-// Si más adelante queremos volver a endurecer este filtro, lo hacemos acá.
-function isClearlyOffTheme(
-_theme: string,
-_clue: string,
-_answer: string
-): boolean {
+// Filtro temático fuerte pero extensible
+function isClearlyOffTheme(theme: string, clue: string, answer: string): boolean {
+const t = theme.toLowerCase();
+const norm = normalizeAnswer(answer);
+if (!norm) return false;
+
+// Nunca marcamos como off-theme las anclas o whitelists explícitos
+const anchorSet = new Set<string>(
+getThemeAnchors(theme).map((a) => normalizeAnswer(a))
+);
+if (anchorSet.has(norm)) return false;
+if (ALWAYS_ALLOW_ANSWERS.has(norm)) return false;
+if (FAMOUS_ACRONYMS.has(norm)) return false;
+
+if (t.includes("argentina")) {
+// Palabras genéricas que no aportan nada al tema Argentina
+const superGeneric = new Set<string>(["DIA", "ALMA", "ESCUELA", "NORTE"]);
+if (superGeneric.has(norm)) return true;
+
+// Mitología / conceptos claramente de otro universo temático
+const mythOrFiction = new Set<string>([
+  "THOR",
+  "ZEUS",
+  "OLIMPO",
+  "ODIN",
+  "ARES",
+  "VENUS",
+  "TRON",
+  "RADON",
+  "BANE",
+  "RA",
+  "ALFA",
+  "PESETA",
+]);
+if (mythOrFiction.has(norm)) return true;
+
+// Grandes ciudades o lugares extranjeros muy notorios
+const foreignPlaces = new Set<string>([
+  "CHICAGO",
+  "PARIS",
+  "LONDON",
+  "LONDRES",
+  "BERLIN",
+  "TOKYO",
+  "ROMA",
+  "ROME",
+  "MADRID",
+  "OSLO",
+]);
+if (foreignPlaces.has(norm)) return true;
+
+const clueLower = clue.toLowerCase();
+if (
+  clueLower.includes("mitolog") ||
+  clueLower.includes("dios del trueno") ||
+  clueLower.includes("rey de los dioses") ||
+  clueLower.includes("película de ciencia ficción")
+) {
+  return true;
+}
+
+
+}
+
 return false;
 }
 
@@ -478,32 +626,37 @@ raw.size ??
 const clamped = Math.min(13, Math.max(9, baseSize));
 const n = clamped % 2 === 0 ? clamped - 1 : clamped;
 
-// Unificamos TODAS las entries con dirección
 type RawWithDir = RawEntry & { direction: Direction };
 
-const collected: RawWithDir[] = [];
+const acrossRaw: RawWithDir[] = [];
+const downRaw: RawWithDir[] = [];
 
 const across = Array.isArray(raw.across) ? raw.across : [];
 const down = Array.isArray(raw.down) ? raw.down : [];
 const extra = Array.isArray(raw.entries) ? raw.entries : [];
 
 for (const e of across) {
-collected.push({ ...e, direction: "across" });
+acrossRaw.push({ ...e, direction: "across" });
 }
 for (const e of down) {
-collected.push({ ...e, direction: "down" });
+downRaw.push({ ...e, direction: "down" });
 }
 for (const e of extra) {
-if (e.direction === "across" || e.direction === "down") {
-collected.push(e as RawWithDir);
+if (e.direction === "across") {
+acrossRaw.push(e as RawWithDir);
+} else if (e.direction === "down") {
+downRaw.push(e as RawWithDir);
 }
 }
 
-if (!collected.length) return null;
+if (!acrossRaw.length && !downRaw.length) return null;
 
 const themeClues = getThemeClueOverrides(theme);
+const anchorSet = new Set<string>(
+getThemeAnchors(theme).map((a) => normalizeAnswer(a))
+);
 
-// Empezamos de una grilla vacía NxN con todo "#"
+// Grilla limpia NxN con todo "#"
 const grid: string[][] = Array.from({ length: n }, () =>
 Array.from({ length: n }, () => "#")
 );
@@ -515,32 +668,47 @@ let num = 1;
 const inBounds = (row: number, col: number) =>
 row >= 0 && col >= 0 && row < n && col < n;
 
-for (const e of collected) {
-const dir = e.direction;
-if (dir !== "across" && dir !== "down") continue;
+// ---------- 1) Procesar ACROSS primero, priorizando anclas ----------
 
+const sortedAcross = [...acrossRaw].sort((a, b) => {
+const aNorm = normalizeAnswer(a.answer ?? "");
+const bNorm = normalizeAnswer(b.answer ?? "");
+const aScore =
+(anchorSet.has(aNorm) ? 2 : 0) + (ALWAYS_ALLOW_ANSWERS.has(aNorm) ? 1 : 0);
+const bScore =
+(anchorSet.has(bNorm) ? 2 : 0) + (ALWAYS_ALLOW_ANSWERS.has(bNorm) ? 1 : 0);
+
+if (aScore !== bScore) return bScore - aScore;
+return bNorm.length - aNorm.length;
+
+
+});
+
+for (const e of sortedAcross) {
 const row = typeof e.row === "number" ? e.row : 0;
 const col = typeof e.col === "number" ? e.col : 0;
 if (!inBounds(row, col)) continue;
 
 const rawAns = e.answer?.toString() ?? "";
 const answer = normalizeAnswer(rawAns);
-if (!answer || answer.length < 3) continue; // evitamos 1–2 letras
+if (!answer || answer.length < 3) continue;
 if (!AtoZ.test(answer)) continue;
 if (isSuspiciousAnswer(answer)) continue;
 if (disallowAnswerForTheme(theme, answer)) continue;
 
+const rawClue = (e.clue ?? "").toString().trim();
+if (isClearlyOffTheme(theme, rawClue, answer)) continue;
+
 const len = answer.length;
 
-// Check de límites
-if (dir === "across" && col + len > n) continue;
-if (dir === "down" && row + len > n) continue;
+// límites horizontales
+if (col + len > n) continue;
 
-// Check de conflictos con lo que ya escribimos en la grilla
+// conflictos con grilla actual
 let conflict = false;
 for (let i = 0; i < len; i++) {
-  const r = dir === "across" ? row : row + i;
-  const c = dir === "across" ? col + i : col;
+  const r = row;
+  const c = col + i;
   const existing = grid[r][c];
   const ch = answer[i];
   if (existing !== "#" && existing !== ch) {
@@ -550,16 +718,12 @@ for (let i = 0; i < len; i++) {
 }
 if (conflict) continue;
 
-// Pista
-const rawClue = (e.clue ?? "").toString().trim();
+// pista (con overrides)
 let finalClue = rawClue;
-
-// Si la pista es muy meta/vacía o menciona la respuesta, intentamos override
 if (
   !finalClue ||
   isBadClue(finalClue) ||
-  clueMentionsAnswer(finalClue, answer) ||
-  isClearlyOffTheme(theme, finalClue, answer)
+  clueMentionsAnswer(finalClue, answer)
 ) {
   const override = themeClues[answer];
   if (override) {
@@ -572,13 +736,13 @@ if (
   }
 }
 
-const startKey = `${row}:${col}:${dir}`;
+const startKey = `${row}:${col}:across`;
 if (usedStart.has(startKey)) continue;
 
-// Escribimos letras en la grilla
+// escribimos letras en grilla
 for (let i = 0; i < len; i++) {
-  const r = dir === "across" ? row : row + i;
-  const c = dir === "across" ? col + i : col;
+  const r = row;
+  const c = col + i;
   grid[r][c] = answer[i];
 }
 
@@ -586,7 +750,89 @@ entries.push({
   number: num++,
   row,
   col,
-  direction: dir,
+  direction: "across",
+  answer,
+  clue: finalClue,
+});
+usedStart.add(startKey);
+
+
+}
+
+// ---------- 2) Procesar DOWN solo si cruzan horizontales (no crean letras nuevas) ----------
+
+const sortedDown = [...downRaw]; // sin prioridad especial por ahora
+
+for (const e of sortedDown) {
+const row = typeof e.row === "number" ? e.row : 0;
+const col = typeof e.col === "number" ? e.col : 0;
+if (!inBounds(row, col)) continue;
+
+const rawAns = e.answer?.toString() ?? "";
+const answer = normalizeAnswer(rawAns);
+if (!answer || answer.length < 3) continue;
+if (!AtoZ.test(answer)) continue;
+if (isSuspiciousAnswer(answer)) continue;
+if (disallowAnswerForTheme(theme, answer)) continue;
+
+const rawClue = (e.clue ?? "").toString().trim();
+if (isClearlyOffTheme(theme, rawClue, answer)) continue;
+
+const len = answer.length;
+
+// límites verticales
+if (row + len > n) continue;
+
+// para down: TODAS las celdas deben YA tener letra compatible
+let conflict = false;
+let allCellsHadLetter = true;
+
+for (let i = 0; i < len; i++) {
+  const r = row + i;
+  const c = col;
+  const existing = grid[r][c];
+  const ch = answer[i];
+
+  if (existing === "#") {
+    allCellsHadLetter = false;
+    break;
+  }
+  if (existing !== ch) {
+    conflict = true;
+    break;
+  }
+}
+
+if (conflict) continue;
+if (!allCellsHadLetter) continue; // no queremos que el down cree "colas" nuevas
+
+// pista (con overrides)
+let finalClue = rawClue;
+if (
+  !finalClue ||
+  isBadClue(finalClue) ||
+  clueMentionsAnswer(finalClue, answer)
+) {
+  const override = themeClues[answer];
+  if (override) {
+    finalClue = language === "es" ? override.es : override.en;
+  } else if (!finalClue) {
+    finalClue =
+      language === "es"
+        ? "Pista pendiente de revisión."
+        : "Clue to be edited.";
+  }
+}
+
+const startKey = `${row}:${col}:down`;
+if (usedStart.has(startKey)) continue;
+
+// NO escribimos letras nuevas: solo añadimos la entry
+entries.push({
+  number: num++,
+  row,
+  col,
+  direction: "down",
   answer,
   clue: finalClue,
 });
@@ -817,74 +1063,6 @@ No generic, meta, or placeholder clues.
 
 Return ONLY the final JSON object, no comments, no explanations.
 `;
-
-// ---------- Theme anchors ----------
-
-type LocalizedClue = { en: string; es: string };
-type LocalizedClueMap = Record<string, LocalizedClue>; // (reservado para futuro)
-
-const THEME_ANCHORS: Record<string, string[]> = {
-"metal music": [
-"THRASH",
-"DOOM",
-"BLACKMETAL",
-"DEATHMETAL",
-"METALCORE",
-"MOSH",
-"MOSHPIT",
-"HEADBANG",
-"RIFF",
-"DOUBLEBASS",
-"METALLICA",
-"SLAYER",
-"MEGADETH",
-"PANTERA",
-"IRONMAIDEN",
-"BLACKSABBATH",
-"MASTEROFPUPPETS",
-"REIGNINBLOOD",
-"RUSTINPEACE",
-"GIG",
-"STAGE",
-"TOUR",
-"BASS",
-"DRUMS",
-"TEMPO",
-"LOUD",
-"CROWD",
-"ALBUM",
-],
-
-argentina: [
-"TANGO",
-"MATE",
-"PAMPA",
-"GAUCHO",
-"ASADO",
-"BARRIO",
-"BANDONEON",
-"OBELISCO",
-"MALBEC",
-"PATAGONIA",
-"LITORAL",
-"CHORIPAN",
-"OMBU",
-],
-};
-
-function getThemeAnchors(theme: string): string[] {
-const key = theme.toLowerCase();
-if (THEME_ANCHORS[key]) return THEME_ANCHORS[key];
-
-if (key.includes("metal") && key.includes("music")) {
-return THEME_ANCHORS["metal music"];
-}
-if (key.includes("argentina")) {
-return THEME_ANCHORS["argentina"];
-}
-
-return [];
-}
 
 // ---------- Prompts ----------
 
