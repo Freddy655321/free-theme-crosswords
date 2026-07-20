@@ -2,11 +2,13 @@
 
 import React, { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
+import { generatedCrosswordIssue } from "../../lib/validateGeneratedCrossword";
 
 export const dynamic = "force-dynamic"; // evitar prerender
 
 type Direction = "across" | "down";
 type Meta = { source?: string; reason?: string; [k: string]: unknown };
+const GRID_SIZE = 11;
 
 interface Entry {
   number: number;
@@ -29,6 +31,53 @@ function isGenericClue(clue: string) {
   return /\b(pista temática|cruce|conjunci[oó]n|abreviatura)\b/i.test(clue);
 }
 
+function normalizeComparable(value: string | undefined | null) {
+  return (value ?? "")
+    .toString()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function storedCrosswordMatchesRequest(
+  crossword: Crossword,
+  requested: { theme: string; language: "es" | "en"; size: number }
+) {
+  const requestedTheme = normalizeComparable(requested.theme);
+  const cachedTheme = normalizeComparable(crossword.theme);
+  const weakLegacySource =
+    crossword.meta?.source === "fallback-best-built" ||
+    crossword.meta?.source === "fallback-demo";
+  const wineAnswers = new Set([
+    "VINO",
+    "VINOS",
+    "UVA",
+    "UVAS",
+    "CEPA",
+    "CEPAS",
+    "MOSTO",
+    "CAVA",
+    "BRUT",
+    "CATA",
+    "MALBEC",
+    "MERLOT",
+    "CABERNET",
+  ]);
+  const barilocheWineCache =
+    requestedTheme === "bariloche" &&
+    crossword.entries?.some((entry) => wineAnswers.has(entry.answer.toUpperCase()));
+
+  return (
+    crossword?.grid?.length > 0 &&
+    !weakLegacySource &&
+    !barilocheWineCache &&
+    cachedTheme === requestedTheme &&
+    crossword.language === requested.language &&
+    crossword.size === requested.size
+  );
+}
+
 function coordsForEntry(e: Entry): Array<string> {
   const out: string[] = [];
   for (let k = 0; k < e.answer.length; k++) {
@@ -46,24 +95,10 @@ function PreviewInner() {
   const [loading, setLoading] = React.useState<boolean>(true);
 
   React.useEffect(() => {
-    const hydrate = async () => {
+    const hydrate = () => {
       setLoading(true);
       setError(null);
 
-      // Plan A: sessionStorage
-      try {
-        const raw = sessionStorage.getItem("generatedCrossword");
-        if (raw) {
-          const parsed = JSON.parse(raw) as Crossword;
-          if (parsed?.grid?.length) {
-            setData(parsed);
-            setLoading(false);
-            return;
-          }
-        }
-      } catch {}
-
-      // Plan B: refetch con theme/lang
       const theme =
         search.get("theme") ||
         (typeof window !== "undefined" ? localStorage.getItem("ftc:lastTheme") : "") ||
@@ -74,29 +109,33 @@ function PreviewInner() {
           ? ((localStorage.getItem("ftc:lastLang") as "es" | "en" | null) ?? "es")
           : "es");
 
+      const previewSize = GRID_SIZE;
+
+      // Plan A: sessionStorage
       try {
-        const res = await fetch("/api/generate-crossword", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ theme, language: lang, size: 9 }),
-        });
-        const cw = (await res.json()) as Crossword;
-        if (!res.ok || !cw?.grid?.length) {
-          setError("No se pudo obtener un crucigrama para previsualizar.");
-        } else {
-          setData(cw);
-          try {
-            sessionStorage.setItem("generatedCrossword", JSON.stringify(cw));
-          } catch {}
+        const raw = sessionStorage.getItem("generatedCrossword");
+        if (raw) {
+          const parsed = JSON.parse(raw) as Crossword;
+          if (
+            storedCrosswordMatchesRequest(parsed, {
+              theme,
+              language: lang,
+              size: previewSize,
+            }) &&
+            !generatedCrosswordIssue(parsed)
+          ) {
+            setData(parsed);
+            setLoading(false);
+            return;
+          }
         }
-      } catch {
-        setError("No se pudo contactar al endpoint desde la vista previa.");
-      } finally {
-        setLoading(false);
-      }
+      } catch {}
+
+      setError("No hay un crucigrama valido para previsualizar. Genera uno nuevo.");
+      setLoading(false);
     };
 
-    void hydrate();
+    hydrate();
   }, [search]);
 
   if (loading) {

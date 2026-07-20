@@ -3,9 +3,12 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
+import { generatedCrosswordIssue } from "../lib/validateGeneratedCrossword";
 
 type Lang = "es" | "en";
 type ApiBody = { theme: string; language: Lang; size: number };
+const GRID_SIZE = 11;
+
 type ApiOk = {
   theme: string;
   language: Lang;
@@ -21,7 +24,15 @@ type ApiOk = {
   }>;
   meta?: Record<string, unknown>;
 };
-type ApiErr = { error: string };
+type ApiErr = {
+  error: string;
+  meta?: {
+    reason?: string;
+    minEntries?: number;
+    lastAttemptPool?: number;
+    [key: string]: unknown;
+  };
+};
 function isApiOk(x: unknown): x is ApiOk {
   const y = x as Partial<ApiOk>;
   return (
@@ -35,18 +46,28 @@ function isApiOk(x: unknown): x is ApiOk {
   );
 }
 
-const DIFF = [
-  { label: "Fácil — 9×9", size: 9 },
-  { label: "Medio — 11×11", size: 11 },
-  { label: "Difícil — 13×13", size: 13 },
-];
+function isApiErr(x: unknown): x is ApiErr {
+  const y = x as Partial<ApiErr>;
+  return !!y && typeof y === "object" && typeof y.error === "string";
+}
+
+function generationErrorMessage(data: ApiErr, status: number) {
+  const reason = typeof data.meta?.reason === "string" ? data.meta.reason : "";
+  const minEntries =
+    typeof data.meta?.minEntries === "number"
+      ? ` Minimo requerido: ${data.meta.minEntries} entradas.`
+      : "";
+
+  if (status === 422) return `${data.error}${reason ? ` ${reason}` : ""}${minEntries}`;
+  if (status === 503) return `${data.error}${reason ? ` ${reason}` : ""}`;
+  return data.error;
+}
 
 export default function GeneratePage() {
   const router = useRouter();
 
   const [theme, setTheme] = React.useState("Argentina");
   const [lang, setLang] = React.useState<Lang>("es");
-  const [size, setSize] = React.useState<number>(11); // DEFAULT 11×11
   const [loading, setLoading] = React.useState(false);
   const [msg, setMsg] = React.useState<string>("");
 
@@ -54,8 +75,11 @@ export default function GeneratePage() {
     if (loading) return;
     setLoading(true);
     setMsg("");
+    try {
+      sessionStorage.removeItem("generatedCrossword");
+    } catch {}
 
-    const body: ApiBody = { theme, language: lang, size };
+    const body: ApiBody = { theme, language: lang, size: GRID_SIZE };
 
     try {
       const res = await fetch("/api/generate-crossword", {
@@ -67,8 +91,25 @@ export default function GeneratePage() {
       // Siempre esperamos 200 (el endpoint ya “siempre 200 + fallback”)
       const data = (await res.json()) as ApiOk | ApiErr;
 
+      if (!res.ok && isApiErr(data)) {
+        setMsg(generationErrorMessage(data, res.status));
+        setLoading(false);
+        return;
+      }
+
       if (!isApiOk(data)) {
-        setMsg(`La respuesta del servidor no tiene el formato esperado.`);
+        setMsg(
+          isApiErr(data)
+            ? generationErrorMessage(data, res.status)
+            : "La respuesta del servidor no tiene el formato esperado."
+        );
+        setLoading(false);
+        return;
+      }
+
+      const qualityIssue = generatedCrosswordIssue(data);
+      if (qualityIssue) {
+        setMsg(`El servidor devolvio un crucigrama invalido: ${qualityIssue}`);
         setLoading(false);
         return;
       }
@@ -81,9 +122,6 @@ export default function GeneratePage() {
       } catch {
         // ignoramos errores de storage
       }
-
-      setMsg(`Generado (${data.size}×${data.size}).`);
-      setLoading(false);
 
       // Ir a vista previa (QA)
       router.push(
@@ -99,11 +137,10 @@ export default function GeneratePage() {
     <main className="mx-auto max-w-4xl p-6">
       <h1 className="text-3xl font-semibold mb-3">Generar crucigrama</h1>
       <p className="text-gray-600 mb-6">
-        Elegí un tema, idioma y el tamaño. La IA genera un puzzle temático listo
-        para jugar.
+        Elegí un tema e idioma. La IA genera un puzzle temático 11x11 listo para jugar.
       </p>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         {/* Tema */}
         <label className="flex flex-col gap-2">
           <span className="text-sm font-medium">Tema</span>
@@ -125,22 +162,6 @@ export default function GeneratePage() {
           >
             <option value="es">Español (ES)</option>
             <option value="en">English (EN)</option>
-          </select>
-        </label>
-
-        {/* Dificultad / Tamaño */}
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Tamaño</span>
-          <select
-            value={size}
-            onChange={(e) => setSize(Number(e.target.value))}
-            className="rounded-xl border px-3 py-2"
-          >
-            {DIFF.map((d) => (
-              <option key={d.size} value={d.size}>
-                {d.label}
-              </option>
-            ))}
           </select>
         </label>
       </div>

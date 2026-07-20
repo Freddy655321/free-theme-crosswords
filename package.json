@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.90.0",
+    "dotenv": "^17.2.3",
     "next": "15.5.4",
     "openai": "^6.7.0",
     "react": "19.1.0",
