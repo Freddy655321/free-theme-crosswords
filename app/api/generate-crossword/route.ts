@@ -38,7 +38,6 @@ import {
 } from "@/app/lib/crosswordUtils";
 import {
   createCspBankAuditReport,
-  cspBankAuditAnalyzeSanitize,
   cspBankAuditCandidateDistribution,
   cspBankAuditDistribution,
   cspBankAuditMergeCounts,
@@ -46,6 +45,8 @@ import {
   cspBankAuditSetDistribution as recordCspBankAuditSetDistribution,
   parseUsableAnswerBankText,
   salvageAnswerStringsFromJson,
+  sanitizeAnswerListWithPolicies,
+  sanitizeInitialAnswerBank,
   type CspBankAuditReport,
 } from "@/app/lib/answerPipeline";
 
@@ -2488,38 +2489,13 @@ function isOverGenericThemeWordForTheme(theme: string, answer: string): boolean 
 }
 
 function sanitizeAnswerList(raw: unknown, maxLen: number, language?: "es" | "en") {
-  const out: string[] = [];
-  const seen = new Set<string>();
-
-  if (!Array.isArray(raw)) return out;
-
-  for (const item of raw) {
-    const a = normalizeAnswer(String(item ?? ""));
-    if (!a) continue;
-
-    // A–Z0-9 only
-    if (!ASCII_A_TO_Z.test(a)) continue;
-
-    // length 3..maxLen
-    if (a.length < 3 || a.length > maxLen) continue;
-
-    // ban obvious junk
-    if (BANNED_ANSWERS.has(a)) continue;
-    if (language && !answerLanguageLooksValidForPuzzle(a, language)) continue;
-    if (isLikelyBadAnswer(a) && !ALWAYS_ALLOW_ANSWERS.has(a)) continue;
-
-    if (seen.has(a)) continue;
-    seen.add(a);
-    out.push(a);
-  }
-
-  // Remove entries that are exact prefixes of a longer entry also present.
-  // Example: MAL vs MALIBU, FRES vs FRESNO, SIL vs SILICON.
-  const filtered = out.filter((a) => {
-    return !out.some((b) => b !== a && b.length > a.length && b.startsWith(a));
+  return sanitizeAnswerListWithPolicies(raw, maxLen, language, {
+    asciiAnswerPattern: ASCII_A_TO_Z,
+    bannedAnswers: BANNED_ANSWERS,
+    alwaysAllowAnswers: ALWAYS_ALLOW_ANSWERS,
+    answerLanguageLooksValidForPuzzle,
+    isLikelyBadAnswer,
   });
-
-  return filtered;
 }
 
 function cspBankAuditLog(label: string, payload: Record<string, unknown>) {
@@ -12859,62 +12835,15 @@ export async function POST(req: NextRequest) {
         usableParsedAnswers.answers.map((answer) => String(answer ?? ""))
       );
 
-      type NoteItem = { answer?: unknown; note?: unknown };
-
-      const notesByAnswer = new Map<string, string>();
-
-      const rawNotes = (usableParsedAnswers as unknown as { notes?: unknown }).notes;
-
-      const notesArr: NoteItem[] = Array.isArray(rawNotes) ? (rawNotes as NoteItem[]) : [];
-
-      for (const n0 of notesArr) {
-        const a = typeof n0.answer === "string" ? normalizeAnswer(n0.answer) : "";
-        const note = typeof n0.note === "string" ? n0.note.trim() : "";
-        if (a && note && !noteLooksWeakThematicContext(note, language)) notesByAnswer.set(a, note);
-      }
-
-      const rawNormalizedAnswers = Array.isArray(usableParsedAnswers.answers)
-        ? usableParsedAnswers.answers.map((answer) => normalizeAnswer(String(answer ?? ""))).filter(Boolean)
-        : [];
-      cspBankAuditSetDistribution(cspBankAuditReport, "after-normalizeAnswer", rawNormalizedAnswers);
-      const geographicCompoundPrefixes = [
-        "CERRO",
-        "LAGO",
-        "RIO",
-        "ISLA",
-        "PUERTO",
-        "VILLA",
-        "COLONIA",
-        "RUTA",
-        "PARQUE",
-        "MONTE",
-      ];
-      for (const answer of rawNormalizedAnswers) {
-        const note = notesByAnswer.get(answer);
-        if (!note) continue;
-        for (const prefix of geographicCompoundPrefixes) {
-          if (!answer.startsWith(prefix)) continue;
-          const suffix = answer.slice(prefix.length);
-          if (suffix.length >= minEntryLenForSize(n) && suffix.length <= n && !notesByAnswer.has(suffix)) {
-            notesByAnswer.set(suffix, note);
-          }
-          if (prefix.length >= minEntryLenForSize(n) && prefix.length <= n && !notesByAnswer.has(prefix)) {
-            notesByAnswer.set(prefix, note);
-          }
-        }
-      }
-
-      // sanitize + dedupe + filter
-      const cleanAnswers = sanitizeAnswerList(usableParsedAnswers.answers, n, language);
-      const normalizedThemeAnswer = normalizeAnswer(theme);
-      for (let i = cleanAnswers.length - 1; i >= 0; i--) {
-        if (cleanAnswers[i] === normalizedThemeAnswer) cleanAnswers.splice(i, 1);
-      }
-      cspBankAuditReport.initialSanitizedCount = cleanAnswers.length;
-      cspBankAuditAnalyzeSanitize(usableParsedAnswers.answers, cleanAnswers, {
+      const {
+        notesByAnswer,
+        rawNormalizedAnswers,
+        cleanAnswers,
+      } = sanitizeInitialAnswerBank({
+        parsedBank: usableParsedAnswers,
         theme,
-        maxLen: n,
         language,
+        size: n,
         report: cspBankAuditReport,
         policies: {
           asciiAnswerPattern: ASCII_A_TO_Z,
@@ -12922,10 +12851,11 @@ export async function POST(req: NextRequest) {
           alwaysAllowAnswers: ALWAYS_ALLOW_ANSWERS,
           answerLanguageLooksValidForPuzzle,
           isLikelyBadAnswer,
+          noteLooksWeakThematicContext,
+          minEntryLenForSize,
         },
+        recordDistribution: cspBankAuditSetDistribution,
       });
-      cspBankAuditSetDistribution(cspBankAuditReport, "after-sanitizeAnswerList", cleanAnswers);
-      notesByAnswer.delete(normalizedThemeAnswer);
       for (const expanded of expandGeographicCompoundAnswers(rawNormalizedAnswers, n)) {
         if (!answerLanguageLooksValidForPuzzle(expanded, language)) continue;
         if (isLikelyBadAnswer(expanded) && !ALWAYS_ALLOW_ANSWERS.has(expanded)) continue;

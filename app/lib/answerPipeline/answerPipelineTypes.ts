@@ -32,3 +32,31 @@ export type SanitizeAuditPolicies = {
   answerLanguageLooksValidForPuzzle: (answer: string, language: "es" | "en") => boolean;
   isLikelyBadAnswer: (answer: string) => boolean;
 };
+
+export type AnswerLanguage = "es" | "en";
+
+export type NoteItem = {
+  answer?: unknown;
+  note?: unknown;
+};
+
+export type AnswerSanitizationPolicies = SanitizeAuditPolicies & {
+  noteLooksWeakThematicContext: (note: string, language: AnswerLanguage) => boolean;
+  minEntryLenForSize: (size: number) => number;
+};
+
+export type SanitizeAnswerListPolicies = Pick<
+  AnswerSanitizationPolicies,
+  | "asciiAnswerPattern"
+  | "bannedAnswers"
+  | "alwaysAllowAnswers"
+  | "answerLanguageLooksValidForPuzzle"
+  | "isLikelyBadAnswer"
+>;
+
+export type SanitizedInitialAnswerBankResult = {
+  notesByAnswer: Map<string, string>;
+  rawNormalizedAnswers: string[];
+  cleanAnswers: string[];
+  normalizedThemeAnswer: string;
+};
