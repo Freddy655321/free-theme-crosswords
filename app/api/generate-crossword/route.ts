@@ -36,6 +36,18 @@ import {
   safeJson,
   shuffleInPlace,
 } from "@/app/lib/crosswordUtils";
+import {
+  createCspBankAuditReport,
+  cspBankAuditAnalyzeSanitize,
+  cspBankAuditCandidateDistribution,
+  cspBankAuditDistribution,
+  cspBankAuditMergeCounts,
+  cspBankAuditRejectedBySet,
+  cspBankAuditSetDistribution as recordCspBankAuditSetDistribution,
+  parseUsableAnswerBankText,
+  salvageAnswerStringsFromJson,
+  type CspBankAuditReport,
+} from "@/app/lib/answerPipeline";
 
 export const runtime = "nodejs";
 
@@ -94,45 +106,6 @@ function errorSummary(error: unknown): string {
       : "";
 
   return causeCode ? `${error.name}: ${error.message} (${causeCode})` : `${error.name}: ${error.message}`;
-}
-
-function salvageAnswerStringsFromJson(text: string): string[] {
-  const keyIndex = text.search(/"answers"\s*:/);
-  if (keyIndex < 0) return [];
-
-  const start = text.indexOf("[", keyIndex);
-  if (start < 0) return [];
-
-  const out: string[] = [];
-  let i = start + 1;
-  while (i < text.length) {
-    const quote = text.indexOf('"', i);
-    if (quote < 0) break;
-
-    let j = quote + 1;
-    let value = "";
-    let escaped = false;
-    while (j < text.length) {
-      const ch = text[j];
-      if (escaped) {
-        value += ch;
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        break;
-      } else {
-        value += ch;
-      }
-      j++;
-    }
-
-    if (j >= text.length) break;
-    if (value && value !== "answers" && value !== "notes") out.push(value);
-    i = j + 1;
-  }
-
-  return out;
 }
 
 function crosswordDensityFromGrid(grid: string[][]): number {
@@ -2549,84 +2522,6 @@ function sanitizeAnswerList(raw: unknown, maxLen: number, language?: "es" | "en"
   return filtered;
 }
 
-type CspBankAuditRejectedSample = {
-  answer: string;
-  reason: string;
-};
-
-type CspBankAuditReport = {
-  theme: string;
-  language: "es" | "en";
-  size: number;
-  initialRawCount: number;
-  initialSanitizedCount: number;
-  validatedCount: number;
-  candidatePoolCount: number;
-  cspCandidateCount: number;
-  distributions: Record<string, Record<string, number>>;
-  rejectedByStage: Record<string, Record<string, number>>;
-  rejectedSamplesByStage: Record<string, CspBankAuditRejectedSample[]>;
-  samplesByStage: Record<string, string[]>;
-  cspMissingLengths: Record<string, number>;
-  cspRequestedTopUpByLength: Record<string, number>;
-  cspTopUpRawByLength: Record<string, number>;
-  cspTopUpAcceptedByLength: Record<string, number>;
-  cspTopUpRejectedByLength: Record<string, number>;
-  cspAdapterRejectedByReason: Record<string, number>;
-  cspDomainDiagnostics: unknown[];
-};
-
-function createCspBankAuditReport(theme: string, language: "es" | "en", size: number): CspBankAuditReport {
-  return {
-    theme,
-    language,
-    size,
-    initialRawCount: 0,
-    initialSanitizedCount: 0,
-    validatedCount: 0,
-    candidatePoolCount: 0,
-    cspCandidateCount: 0,
-    distributions: {},
-    rejectedByStage: {},
-    rejectedSamplesByStage: {},
-    samplesByStage: {},
-    cspMissingLengths: {},
-    cspRequestedTopUpByLength: {},
-    cspTopUpRawByLength: {},
-    cspTopUpAcceptedByLength: {},
-    cspTopUpRejectedByLength: {},
-    cspAdapterRejectedByReason: {},
-    cspDomainDiagnostics: [],
-  };
-}
-
-function cspBankAuditDistribution(values: Iterable<string>): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const raw of values) {
-    const answer = normalizeAnswer(raw);
-    if (!answer) continue;
-    out[String(answer.length)] = (out[String(answer.length)] ?? 0) + 1;
-  }
-  return out;
-}
-
-function cspBankAuditCandidateDistribution(values: Iterable<{ answer: string }>): Record<string, number> {
-  return cspBankAuditDistribution(Array.from(values, (value) => value.answer));
-}
-
-function cspBankAuditSample(values: Iterable<string>, limit = 20): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const raw of values) {
-    const answer = normalizeAnswer(raw);
-    if (!answer || seen.has(answer)) continue;
-    seen.add(answer);
-    out.push(answer);
-    if (out.length >= limit) break;
-  }
-  return out;
-}
-
 function cspBankAuditLog(label: string, payload: Record<string, unknown>) {
   console.warn(`[csp-bank-audit] ${label} ${JSON.stringify(payload)}`);
 }
@@ -2660,92 +2555,7 @@ function cspValueOrderingDiagnosticLog(payload: Record<string, unknown>) {
 }
 
 function cspBankAuditSetDistribution(report: CspBankAuditReport, stage: string, values: Iterable<string>) {
-  const sampleSource = Array.from(values);
-  report.distributions[stage] = cspBankAuditDistribution(sampleSource);
-  report.samplesByStage[stage] = cspBankAuditSample(sampleSource);
-  cspBankAuditLog(stage, {
-    count: sampleSource.length,
-    byLength: report.distributions[stage],
-    sample: report.samplesByStage[stage],
-  });
-}
-
-function cspBankAuditAddRejected(
-  report: CspBankAuditReport,
-  stage: string,
-  reason: string,
-  answer: string
-) {
-  const stageReasons = report.rejectedByStage[stage] ?? {};
-  stageReasons[reason] = (stageReasons[reason] ?? 0) + 1;
-  report.rejectedByStage[stage] = stageReasons;
-  const samples = report.rejectedSamplesByStage[stage] ?? [];
-  if (samples.length < 20) samples.push({ answer: normalizeAnswer(answer), reason });
-  report.rejectedSamplesByStage[stage] = samples;
-}
-
-function cspBankAuditMergeCounts(target: Record<string, number>, source: Record<string | number, number>) {
-  for (const [key, value] of Object.entries(source)) {
-    target[String(key)] = (target[String(key)] ?? 0) + value;
-  }
-}
-
-function cspBankAuditAnalyzeSanitize(
-  raw: unknown,
-  sanitized: string[],
-  opts: { theme: string; maxLen: number; language: "es" | "en"; report: CspBankAuditReport }
-) {
-  if (!Array.isArray(raw)) {
-    cspBankAuditAddRejected(opts.report, "sanitize", "other", "");
-    return;
-  }
-
-  const accepted = new Set(sanitized.map(normalizeAnswer).filter(Boolean));
-  const firstPass: string[] = [];
-  const seen = new Set<string>();
-
-  for (const item of raw) {
-    const answer = normalizeAnswer(String(item ?? ""));
-    let reason: string | null = null;
-    if (!answer) reason = "empty";
-    else if (!ASCII_A_TO_Z.test(answer)) reason = "invalid-characters";
-    else if (answer.length < 3) reason = "too-short";
-    else if (answer.length > opts.maxLen) reason = "too-long";
-    else if (BANNED_ANSWERS.has(answer)) reason = "banned-answer";
-    else if (!answerLanguageLooksValidForPuzzle(answer, opts.language)) reason = "likely-bad-answer";
-    else if (isLikelyBadAnswer(answer) && !ALWAYS_ALLOW_ANSWERS.has(answer)) reason = "likely-bad-answer";
-    else if (seen.has(answer)) reason = "duplicate-after-normalization";
-
-    if (reason) {
-      cspBankAuditAddRejected(opts.report, "sanitize", reason, answer);
-      continue;
-    }
-
-    seen.add(answer);
-    firstPass.push(answer);
-  }
-
-  for (const answer of firstPass) {
-    if (!accepted.has(answer)) cspBankAuditAddRejected(opts.report, "sanitize", "prefix-of-longer-answer", answer);
-  }
-
-  const themeNorm = normalizeAnswer(opts.theme);
-  if (themeNorm && firstPass.includes(themeNorm) && !sanitized.includes(themeNorm)) {
-    cspBankAuditAddRejected(opts.report, "post-sanitize-theme-filter", "exact-theme", themeNorm);
-  }
-}
-
-function cspBankAuditRejectedBySet(
-  report: CspBankAuditReport,
-  stage: string,
-  input: string[],
-  kept: string[],
-  reason: string
-) {
-  const keptSet = new Set(kept.map(normalizeAnswer).filter(Boolean));
-  for (const answer of input.map(normalizeAnswer).filter(Boolean)) {
-    if (!keptSet.has(answer)) cspBankAuditAddRejected(report, stage, reason, answer);
-  }
+  recordCspBankAuditSetDistribution(report, stage, values, cspBankAuditLog);
 }
 
 function expandGeographicCompoundAnswers(answers: string[], maxLen: number): string[] {
@@ -13033,17 +12843,7 @@ export async function POST(req: NextRequest) {
         rawText_tail: rawAnswersText.slice(-200),
       });
 
-      const parsedAnswers = safeJson<RawAnswerBank>(rawAnswersText);
-      const salvagedAnswers =
-        !parsedAnswers || !Array.isArray(parsedAnswers.answers)
-          ? salvageAnswerStringsFromJson(rawAnswersText)
-          : [];
-      const usableParsedAnswers: RawAnswerBank | null =
-        parsedAnswers && Array.isArray(parsedAnswers.answers)
-          ? parsedAnswers
-          : salvagedAnswers.length > 0
-          ? { answers: salvagedAnswers }
-          : null;
+      const { usableParsedAnswers } = parseUsableAnswerBankText(rawAnswersText);
 
       if (!usableParsedAnswers || !Array.isArray(usableParsedAnswers.answers)) {
         lastAnswerbankIssue = `answerbank parse failed; chars=${rawAnswersText.length}; finish=${answerbankTextResult.finishReason ?? "unknown"}`;
@@ -13116,6 +12916,13 @@ export async function POST(req: NextRequest) {
         maxLen: n,
         language,
         report: cspBankAuditReport,
+        policies: {
+          asciiAnswerPattern: ASCII_A_TO_Z,
+          bannedAnswers: BANNED_ANSWERS,
+          alwaysAllowAnswers: ALWAYS_ALLOW_ANSWERS,
+          answerLanguageLooksValidForPuzzle,
+          isLikelyBadAnswer,
+        },
       });
       cspBankAuditSetDistribution(cspBankAuditReport, "after-sanitizeAnswerList", cleanAnswers);
       notesByAnswer.delete(normalizedThemeAnswer);
