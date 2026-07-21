@@ -16,6 +16,26 @@ import {
   loadLocalSupportCandidates11,
 } from "@/app/lib/buildHybridCspCandidateReservoir11";
 import { CROSSWORD_PATTERNS_11 } from "@/app/lib/crosswordPatterns11";
+import type {
+  Cell,
+  Crossword,
+  DerivedEntry,
+  Direction,
+  Entry,
+  Placement,
+  RawAnswerBank,
+  RawClueBank,
+  WordCandidate,
+} from "@/app/lib/crosswordTypes";
+import {
+  ASCII_A_TO_Z,
+  inBounds,
+  isBlock,
+  makeSeededRng,
+  normalizeAnswer,
+  safeJson,
+  shuffleInPlace,
+} from "@/app/lib/crosswordUtils";
 
 export const runtime = "nodejs";
 
@@ -49,28 +69,6 @@ function getGenerateCrosswordSupabaseSmokeClient(): GenerateCrosswordSupabaseSmo
   );
 }
 
-type Direction = "across" | "down";
-
-interface Entry {
-  number: number;
-  row: number; // 0-index
-  col: number; // 0-index
-  direction: Direction;
-  answer: string; // A–Z0-9 (ASCII), sin espacios
-  clue: string;
-}
-
-interface Crossword {
-  theme: string;
-  language: "es" | "en";
-  size: number; // NxN
-  grid: string[][];
-  entries: Entry[];
-  meta?: Record<string, unknown>;
-}
-
-type DerivedEntry = Omit<Entry, "clue">;
-
 // -------------------- Utils --------------------
 
 function configureOpenAITlsForLocalDev() {
@@ -96,40 +94,6 @@ function errorSummary(error: unknown): string {
       : "";
 
   return causeCode ? `${error.name}: ${error.message} (${causeCode})` : `${error.name}: ${error.message}`;
-}
-
-// NOTE: allow digits too (e.g., TH1RT3EN, HANGAR18)
-const ASCII_A_TO_Z = /^[A-Z0-9]+$/;
-const isBlock = (c: string) => c === "#";
-
-function normalizeAnswer(s: string | undefined | null): string {
-  if (!s) return "";
-  return s
-    .toString()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toUpperCase()
-    .replace(/\s|-/g, "");
-}
-
-function safeJson<T = unknown>(text: string): T | null {
-  if (!text) return null;
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    // salvage common "extra text" / truncation cases
-    const first = text.indexOf("{");
-    const last = text.lastIndexOf("}");
-    if (first >= 0 && last > first) {
-      const sliced = text.slice(first, last + 1);
-      try {
-        return JSON.parse(sliced) as T;
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
 }
 
 function salvageAnswerStringsFromJson(text: string): string[] {
@@ -1497,24 +1461,6 @@ function isPublishableAnswerForTheme(opts: {
   return true;
 }
 
-function shuffleInPlace<T>(arr: T[], rng: () => number) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-}
-
-function makeSeededRng(seed: number) {
-  let t = seed >>> 0;
-  return () => {
-    t += 0x6d2b79f5;
-    let x = t;
-    x = Math.imul(x ^ (x >>> 15), x | 1);
-    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
-    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 // -------------------- Theme anchors / overrides --------------------
 
 const ALWAYS_ALLOW_ANSWERS = new Set<string>([]); // theme-agnostic
@@ -1639,21 +1585,8 @@ function isAcceptable(grid: string[][], derived: Omit<Entry, "clue">[], themeSet
 
 // -------------------- Freeform (Option B) constructor --------------------
 
-type Cell = "#" | "" | string;
-
-type Placement = {
-  word: string;
-  row: number;
-  col: number;
-  dir: Direction;
-};
-
 function makeEmptyWorkingGrid(n: number): Cell[][] {
   return Array.from({ length: n }, () => Array.from({ length: n }, () => "" as Cell));
-}
-
-function inBounds(n: number, r: number, c: number) {
-  return r >= 0 && r < n && c >= 0 && c < n;
 }
 
 function getCell(grid: Cell[][], r: number, c: number): Cell {
@@ -1999,12 +1932,6 @@ function keepLargestConnectedComponent(blocked: Cell[][]): Cell[][] {
   return out;
 }
 
-type WordCandidate = {
-  answer: string;
-  thematic: boolean;
-  source: "anchor" | "model" | "support" | "filler";
-};
-
 // -------------------- Filler pool (local, deterministic) --------------------
 // These are common crossword-friendly fills (3–5 letters). They are NOT theme-linked.
 // Keep them ASCII A–Z only. No plurals explosion; moderate list is enough.
@@ -2237,7 +2164,6 @@ async function rankSemanticSupportWords(opts: {
     .map((item) => item.word);
 }
 
-type RawAnswerBank = { answers?: string[]; notes?: { answer: string; note: string }[] };
 const TARGET_ANSWERS = 70;
 const ANSWERBANK_MODEL = process.env.OPENAI_ANSWERBANK_MODEL ?? "gpt-4.1-mini";
 const CLUE_MODEL = process.env.OPENAI_CLUE_MODEL ?? "gpt-4o-mini";
@@ -8715,8 +8641,6 @@ LANGUAGE: \${languageLabel}
 ITEMS:
 \${itemsJson}
 `;
-
-type RawClueBank = { clues?: Array<{ answer?: string; clue?: string }> };
 
 // -------------------- Clue plumbing --------------------
 
