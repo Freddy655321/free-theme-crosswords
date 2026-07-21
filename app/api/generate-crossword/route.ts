@@ -43,6 +43,10 @@ import {
   cspBankAuditMergeCounts,
   cspBankAuditRejectedBySet,
   cspBankAuditSetDistribution as recordCspBankAuditSetDistribution,
+  applyValidatedAnswersToCleanBank,
+  buildPrePoolAnswerBankState,
+  buildThematicKeepSet,
+  mergeExpandedAnswers,
   parseUsableAnswerBankText,
   salvageAnswerStringsFromJson,
   sanitizeAnswerListWithPolicies,
@@ -12856,11 +12860,17 @@ export async function POST(req: NextRequest) {
         },
         recordDistribution: cspBankAuditSetDistribution,
       });
-      for (const expanded of expandGeographicCompoundAnswers(rawNormalizedAnswers, n)) {
-        if (!answerLanguageLooksValidForPuzzle(expanded, language)) continue;
-        if (isLikelyBadAnswer(expanded) && !ALWAYS_ALLOW_ANSWERS.has(expanded)) continue;
-        if (!cleanAnswers.includes(expanded)) cleanAnswers.push(expanded);
-      }
+      mergeExpandedAnswers({
+        target: cleanAnswers,
+        source: rawNormalizedAnswers,
+        size: n,
+        expandAnswers: expandGeographicCompoundAnswers,
+        acceptExpanded: (answer) => {
+          if (!answerLanguageLooksValidForPuzzle(answer, language)) return false;
+          if (isLikelyBadAnswer(answer) && !ALWAYS_ALLOW_ANSWERS.has(answer)) return false;
+          return true;
+        },
+      });
 
       const topUpTarget =
         n === 11
@@ -12903,9 +12913,12 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      for (const expanded of expandGeographicCompoundAnswers(cleanAnswers, n)) {
-        if (!cleanAnswers.includes(expanded)) cleanAnswers.push(expanded);
-      }
+      mergeExpandedAnswers({
+        target: cleanAnswers,
+        source: cleanAnswers,
+        size: n,
+        expandAnswers: expandGeographicCompoundAnswers,
+      });
       cspBankAuditSetDistribution(cspBankAuditReport, "after-general-topups", cleanAnswers);
 
       // Minimum clean answers required
@@ -13181,28 +13194,17 @@ const minClean = n === 9 ? 16 : n === 11 ? minPublishEntriesForSize(n) : 26;
 
       cspBankAuditSetDistribution(cspBankAuditReport, "after-all-general-and-validation-topups", validated);
 
-const thematicKeepSet = new Set(
-  validated
-    .map((a) => normalizeAnswer(a))
-    .filter(Boolean)
-);
-      if (n === 11) {
-        for (const answer of answerbankTextResult.contextAnswers ?? []) {
-          const note = notesByAnswer.get(answer);
-          if (
-            structuredTrustedSet.has(answer) &&
-            note &&
-            note.length >= 8 &&
-            !noteLooksWeakThematicContext(note, language)
-          ) {
-            thematicKeepSet.add(answer);
-          }
-        }
-      }
-      for (const expanded of expandGeographicCompoundAnswers(Array.from(thematicKeepSet), n)) {
-        thematicKeepSet.add(expanded);
-        if (!cleanAnswers.includes(expanded)) cleanAnswers.push(expanded);
-      }
+      const thematicKeepSet = buildThematicKeepSet({
+        validated,
+        contextAnswers: answerbankTextResult.contextAnswers ?? [],
+        structuredTrustedSet,
+        notesByAnswer,
+        language,
+        size: n,
+        cleanAnswers,
+        expandAnswers: expandGeographicCompoundAnswers,
+        policies: { noteLooksWeakThematicContext },
+      });
       lastAnswerStats = {
         cleanCount: cleanAnswers.length,
         cleanSample: cleanAnswers.slice(0, 30),
@@ -13212,55 +13214,27 @@ const thematicKeepSet = new Set(
         thematicKeepSample: Array.from(thematicKeepSet).slice(0, 30),
       };
 
-      const MIN_KEEP_TO_APPLY = Math.max(12, Math.floor(minClean * 0.5)); // 26 => 13
-
-      if (validated.length >= MIN_KEEP_TO_APPLY) {
-        const next: string[] = [];
-        const seen = new Set<string>();
-
-        for (const a of validated) {
-          if (seen.has(a)) continue;
-          seen.add(a);
-          next.push(a);
-        }
-
-        // For 11x11, do not re-add unvalidated model answers: they are the
-        // source of hallucinated "thematic" entries.
-        if (n !== 11 && next.length < minClean) {
-          for (const a of cleanAnswers) {
-            if (next.length >= minClean) break;
-            if (seen.has(a)) continue;
-            seen.add(a);
-            next.push(a);
-          }
-        }
-
-        if (n !== 11) {
-          // keep extra variety up to TARGET_ANSWERS
-          for (const a of cleanAnswers) {
-            if (next.length >= TARGET_ANSWERS) break;
-            if (seen.has(a)) continue;
-            seen.add(a);
-            next.push(a);
-          }
-        }
-
-        cleanAnswers.length = 0;
-        for (const a of next) cleanAnswers.push(a);
-
+      const validationApplyResult = applyValidatedAnswersToCleanBank({
+        cleanAnswers,
+        validated,
+        size: n,
+        minClean,
+        targetAnswers: TARGET_ANSWERS,
+      });
+      if (validationApplyResult.applied) {
         console.warn("[generate-crossword] validate: applied", {
           attempt,
           keep: validated.length,
-          finalCount: cleanAnswers.length,
+          finalCount: validationApplyResult.finalCount,
           minClean,
-          minKeepToApply: MIN_KEEP_TO_APPLY,
+          minKeepToApply: validationApplyResult.minKeepToApply,
         });
       } else {
         console.warn("[generate-crossword] validate: keep too small, skipping prune", {
           attempt,
           keep: validated.length,
-          minKeepToApply: MIN_KEEP_TO_APPLY,
-          cleanBefore: cleanAnswers.length,
+          minKeepToApply: validationApplyResult.minKeepToApply,
+          cleanBefore: validationApplyResult.cleanBefore,
         });
       }
 
@@ -13274,7 +13248,6 @@ const thematicKeepSet = new Set(
         continue;
       }
 
-      const normalizedAnswerBank: RawAnswerBank = { answers: cleanAnswers };
       let supportWords: string[] =
         n === 11
           ? (answerbankTextResult.contextAnswers ?? []).filter((answer) =>
@@ -13397,26 +13370,19 @@ const thematicKeepSet = new Set(
       }
     }
 
-    const broadModelThematicSet = new Set<string>(
-      cleanAnswers
-        .map((a) => normalizeAnswer(a))
-        .filter(Boolean)
-        .filter((a) => !isOverGenericThemeWordForTheme(theme, a))
-        .filter((a) => {
-          const languageFiller = language === "es" ? SPANISH_FILLER_WORDS : FILLER_WORDS;
-          return thematicKeepSet.has(a) || !languageFiller.includes(a);
-        })
-    );
-    const themeSetForAttempt =
-      n === 11
-        ? new Set<string>(thematicKeepSet)
-        : new Set<string>([
-            ...broadModelThematicSet,
-            ...thematicKeepSet,
-          ]);
-    const publishThemeSet =
-      thematicKeepSet.size >= 10 ? thematicKeepSet : themeSetForAttempt;
-    const placementThemeSet = themeSetForAttempt;
+    const prePoolAnswerBankState = buildPrePoolAnswerBankState({
+      cleanAnswers,
+      validated,
+      thematicKeepSet,
+      theme,
+      language,
+      size: n,
+      fillerWords: language === "es" ? SPANISH_FILLER_WORDS : FILLER_WORDS,
+      policies: { isExcludedFromBroadThematicSet: isOverGenericThemeWordForTheme },
+    });
+    const publishThemeSet = prePoolAnswerBankState.thematicSets.publishThemeSet;
+    const placementThemeSet = prePoolAnswerBankState.thematicSets.placementThemeSet;
+    const normalizedAnswerBank: RawAnswerBank = prePoolAnswerBankState.normalizedAnswerBank;
 
     const rawPool = buildCandidatePoolFromAnswers(
       theme,

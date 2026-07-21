@@ -60,3 +60,81 @@ export type SanitizedInitialAnswerBankResult = {
   cleanAnswers: string[];
   normalizedThemeAnswer: string;
 };
+
+export type MergeExpandedAnswersInput = {
+  target: string[];
+  source: readonly string[];
+  size: number;
+  expandAnswers: (answers: string[], maxLen: number) => string[];
+  acceptExpanded?: (answer: string) => boolean;
+};
+
+export type ThematicKeepSetPolicies = {
+  noteLooksWeakThematicContext: (note: string, language: AnswerLanguage) => boolean;
+};
+
+export type BuildThematicKeepSetInput = {
+  validated: readonly string[];
+  contextAnswers: readonly string[];
+  structuredTrustedSet: ReadonlySet<string>;
+  notesByAnswer: Map<string, string>;
+  language: AnswerLanguage;
+  size: number;
+  cleanAnswers: string[];
+  expandAnswers: (answers: string[], maxLen: number) => string[];
+  policies: ThematicKeepSetPolicies;
+};
+
+export type AnswerBankStats = {
+  cleanCount: number;
+  cleanSample: string[];
+  validatedCount: number;
+  validatedSample: string[];
+  thematicKeepCount: number;
+  thematicKeepSample: string[];
+};
+
+export type ApplyValidatedAnswersToCleanBankInput = {
+  cleanAnswers: string[];
+  validated: readonly string[];
+  size: number;
+  minClean: number;
+  targetAnswers: number;
+};
+
+export type ApplyValidatedAnswersToCleanBankResult = {
+  applied: boolean;
+  minKeepToApply: number;
+  finalCount: number;
+  cleanBefore?: number;
+};
+
+export type PrePoolAnswerBankPolicies = {
+  isExcludedFromBroadThematicSet: (theme: string, answer: string) => boolean;
+};
+
+export type AnswerBankThematicSets = {
+  broadModelThematicSet: Set<string>;
+  themeSetForAttempt: Set<string>;
+  publishThemeSet: Set<string>;
+  placementThemeSet: Set<string>;
+};
+
+export type BuildPrePoolAnswerBankStateInput = {
+  cleanAnswers: string[];
+  validated: readonly string[];
+  thematicKeepSet: Set<string>;
+  theme: string;
+  language: AnswerLanguage;
+  size: number;
+  fillerWords: readonly string[];
+  policies: PrePoolAnswerBankPolicies;
+};
+
+export type PrePoolAnswerBankState = {
+  normalizedAnswerBank: {
+    answers: string[];
+  };
+  thematicSets: AnswerBankThematicSets;
+  stats: AnswerBankStats;
+};
