@@ -138,3 +138,58 @@ export type PrePoolAnswerBankState = {
   thematicSets: AnswerBankThematicSets;
   stats: AnswerBankStats;
 };
+
+export type RequestAnswerTopUpMessage = {
+  role: "system" | "user";
+  content: string;
+};
+
+export type RequestAnswerTopUpRequestArgs = {
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  response_format: { type: "json_object" };
+  messages: RequestAnswerTopUpMessage[];
+};
+
+export type RequestAnswerTopUpCompletionResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+    };
+  }>;
+};
+
+export type RequestAnswerTopUpClient = {
+  chat: {
+    completions: {
+      create(request: RequestAnswerTopUpRequestArgs): Promise<RequestAnswerTopUpCompletionResponse>;
+    };
+  };
+};
+
+export type RequestAnswerTopUpParseMode = "answers-with-salvage" | "answers-no-salvage";
+
+export type RequestAnswerTopUpLoggerPayload = {
+  rawText: string;
+  rawText_len: number;
+  rawText_head: string;
+  rawText_tail: string;
+};
+
+export type RequestAnswerTopUpInput = {
+  client: RequestAnswerTopUpClient;
+  request: RequestAnswerTopUpRequestArgs;
+  parseMode: RequestAnswerTopUpParseMode;
+  maxLen: number;
+  language: AnswerLanguage;
+  sanitize: (raw: unknown, maxLen: number, language: AnswerLanguage) => string[];
+  logger?: (payload: RequestAnswerTopUpLoggerPayload) => void;
+};
+
+export type RequestAnswerTopUpResult = {
+  rawText: string;
+  parsedAnswers: string[];
+  salvagedAnswers: string[];
+  cleanedAnswers: string[];
+};

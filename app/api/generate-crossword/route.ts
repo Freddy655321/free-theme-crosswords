@@ -48,7 +48,7 @@ import {
   buildThematicKeepSet,
   mergeExpandedAnswers,
   parseUsableAnswerBankText,
-  salvageAnswerStringsFromJson,
+  requestAnswerTopUp,
   sanitizeAnswerListWithPolicies,
   sanitizeInitialAnswerBank,
   type CspBankAuditReport,
@@ -3826,34 +3826,34 @@ All answers must be UNIQUE (no repeats).
 Return JSON only. No extra keys. No notes.
 `;
 
-  const completion = await client.chat.completions.create({
-    model: size === 11 ? ANSWERBANK_SEARCH_MODEL : ANSWERBANK_MODEL,
-    temperature: 0.2,
-    max_tokens: Math.min(3200, 800 + need * 40),
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: "Return ONLY valid JSON. No extra text." },
-      { role: "user", content: prompt },
-    ],
+  const result = await requestAnswerTopUp({
+    client,
+    request: {
+      model: size === 11 ? ANSWERBANK_SEARCH_MODEL : ANSWERBANK_MODEL,
+      temperature: 0.2,
+      max_tokens: Math.min(3200, 800 + need * 40),
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "Return ONLY valid JSON. No extra text." },
+        { role: "user", content: prompt },
+      ],
+    },
+    parseMode: "answers-with-salvage",
+    maxLen: size,
+    language,
+    sanitize: sanitizeAnswerList,
+    logger: (raw) => {
+      console.warn("[generate-crossword] answerbank topup raw", {
+        attempt,
+        need,
+        rawText_len: raw.rawText_len,
+        rawText_head: raw.rawText_head,
+        rawText_tail: raw.rawText_tail,
+      });
+    },
   });
 
-  const text = completion.choices?.[0]?.message?.content ?? "";
-  console.warn("[generate-crossword] answerbank topup raw", {
-    attempt,
-    need,
-    rawText_len: text.length,
-    rawText_head: text.slice(0, 200),
-    rawText_tail: text.slice(-150),
-  });
-
-  const parsed = safeJson<RawAnswerBank>(text);
-  const salvaged = !parsed || !Array.isArray(parsed.answers) ? salvageAnswerStringsFromJson(text) : [];
-  const cleaned = sanitizeAnswerList(
-    parsed && Array.isArray(parsed.answers) ? parsed.answers : salvaged,
-    size,
-    language
-  );
-  return cleaned;
+  return result.cleanedAnswers;
 }
 
 async function topUpAnswersRobust(opts: {
@@ -3941,22 +3941,30 @@ THEME: ${theme}
 LANGUAGE: ${languageLabel}
 `;
 
-      const completion = await client.chat.completions.create({
-        model: ANSWERBANK_SEARCH_MODEL,
-        temperature: 0.1,
-        max_tokens: 900,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content: `Return ONLY valid JSON. Every answer must have exactly ${len} characters.`,
-          },
-          { role: "user", content: prompt },
-        ],
+      const result = await requestAnswerTopUp({
+        client,
+        request: {
+          model: ANSWERBANK_SEARCH_MODEL,
+          temperature: 0.1,
+          max_tokens: 900,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: `Return ONLY valid JSON. Every answer must have exactly ${len} characters.`,
+            },
+            { role: "user", content: prompt },
+          ],
+        },
+        parseMode: "answers-with-salvage",
+        maxLen: size,
+        language,
+        sanitize: sanitizeAnswerList,
       });
       return {
         len,
-        text: completion.choices?.[0]?.message?.content ?? "",
+        text: result.rawText,
+        cleaned: result.cleanedAnswers,
       };
     })
   );
@@ -3965,18 +3973,9 @@ LANGUAGE: ${languageLabel}
   const accepted: string[] = [];
 
   for (const response of responses) {
-    const parsed = safeJson<RawAnswerBank>(response.text);
-    const salvaged = !parsed || !Array.isArray(parsed.answers)
-      ? salvageAnswerStringsFromJson(response.text)
-      : [];
-    const cleaned = sanitizeAnswerList(
-      parsed && Array.isArray(parsed.answers) ? parsed.answers : salvaged,
-      size,
-      language
-    );
     const limit = Math.min(desiredByLength.get(response.len) ?? 0, 10);
     let added = 0;
-    for (const answer of cleaned) {
+    for (const answer of response.cleaned) {
       if (answer.length !== response.len || existingSet.has(answer)) continue;
       accepted.push(answer);
       existingSet.add(answer);
@@ -4050,27 +4049,33 @@ Language: ${languageLabel}
 Return JSON only.
 `;
 
-  const completion = await client.chat.completions.create({
-    model: ANSWERBANK_SEARCH_MODEL,
-    temperature: 0.2,
-    max_tokens: 2200,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: "Return ONLY valid JSON. No extra text." },
-      { role: "user", content: prompt },
-    ],
+  const result = await requestAnswerTopUp({
+    client,
+    request: {
+      model: ANSWERBANK_SEARCH_MODEL,
+      temperature: 0.2,
+      max_tokens: 2200,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "Return ONLY valid JSON. No extra text." },
+        { role: "user", content: prompt },
+      ],
+    },
+    parseMode: "answers-no-salvage",
+    maxLen: Math.min(size, 8),
+    language,
+    sanitize: sanitizeAnswerList,
+    logger: (raw) => {
+      console.warn("[generate-crossword] support raw", {
+        attempt,
+        rawText_len: raw.rawText.length,
+        rawText_head: raw.rawText.slice(0, 160),
+        rawText_tail: raw.rawText.slice(-120),
+      });
+    },
   });
 
-  const text = completion.choices?.[0]?.message?.content ?? "";
-  console.warn("[generate-crossword] support raw", {
-    attempt,
-    rawText_len: text.length,
-    rawText_head: text.slice(0, 160),
-    rawText_tail: text.slice(-120),
-  });
-
-  const parsed = safeJson<RawAnswerBank>(text);
-  return sanitizeAnswerList(parsed?.answers, Math.min(size, 8), language).filter((a) => a.length >= 3);
+  return result.cleanedAnswers.filter((a) => a.length >= 3);
 }
 
 function inferLocalSupportWords(
