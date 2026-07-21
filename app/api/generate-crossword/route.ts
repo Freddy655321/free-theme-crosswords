@@ -19,6 +19,36 @@ import { CROSSWORD_PATTERNS_11 } from "@/app/lib/crosswordPatterns11";
 
 export const runtime = "nodejs";
 
+type GenerateCrosswordOpenAIClient = OpenAI;
+type GenerateCrosswordOpenAIOptions = ConstructorParameters<typeof OpenAI>[0];
+type GenerateCrosswordSupabaseSmokeClient = {
+  from(table: string): {
+    select(columns: string): {
+      limit(count: number): Promise<unknown>;
+    };
+  };
+};
+type GenerateCrosswordTestOverrides = {
+  createOpenAIClient?: (opts: GenerateCrosswordOpenAIOptions) => GenerateCrosswordOpenAIClient;
+  getSupabaseSmokeClient?: () => GenerateCrosswordSupabaseSmokeClient;
+  timeBudgetMs?: number;
+};
+
+declare global {
+  var __generateCrosswordTestOverrides: GenerateCrosswordTestOverrides | undefined;
+}
+
+function createGenerateCrosswordOpenAIClient(opts: GenerateCrosswordOpenAIOptions): GenerateCrosswordOpenAIClient {
+  return globalThis.__generateCrosswordTestOverrides?.createOpenAIClient?.(opts) ?? new OpenAI(opts);
+}
+
+function getGenerateCrosswordSupabaseSmokeClient(): GenerateCrosswordSupabaseSmokeClient {
+  return (
+    globalThis.__generateCrosswordTestOverrides?.getSupabaseSmokeClient?.() ??
+    (supabaseAdmin as unknown as GenerateCrosswordSupabaseSmokeClient)
+  );
+}
+
 type Direction = "across" | "down";
 
 interface Entry {
@@ -12588,7 +12618,7 @@ function getDemoCrossword(size: number, theme: string, language: "es" | "en") {
 
 export async function POST(req: NextRequest) {
   try {
-    await supabaseAdmin.from("crosswords").select("id").limit(1);
+    await getGenerateCrosswordSupabaseSmokeClient().from("crosswords").select("id").limit(1);
   } catch (e) {
     console.warn("[generate-crossword] supabase check failed (non-fatal)", {
       error: e instanceof Error ? e.message : String(e),
@@ -12608,11 +12638,13 @@ export async function POST(req: NextRequest) {
   configureOpenAITlsForLocalDev();
 
   const apiKey = process.env.OPENAI_API_KEY;
-  const client = apiKey ? new OpenAI({ apiKey, timeout: n === 11 ? 45_000 : 10_000, maxRetries: 0 }) : null;
+  const client = apiKey
+    ? createGenerateCrosswordOpenAIClient({ apiKey, timeout: n === 11 ? 45_000 : 10_000, maxRetries: 0 })
+    : null;
 
   const TIME_BUDGET_MS = n === 11 ? 240_000 : 22_000;
   const t0 = Date.now();
-  const deadlineMs = t0 + TIME_BUDGET_MS;
+  const deadlineMs = t0 + (globalThis.__generateCrosswordTestOverrides?.timeBudgetMs ?? TIME_BUDGET_MS);
   const csp11Enabled = n === 11 && isCsp11Enabled();
   const csp11DiagnosticOnly = shouldUseCspDiagnosticOnly({
     cspEnabled: csp11Enabled,
