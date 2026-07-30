@@ -5,3 +5,4 @@ export * from "./sanitizeAnswers";
 export * from "./mergeAnswerBank";
 export * from "./requestAnswerTopUp";
 export * from "./runRobustAnswerTopUp";
+export * from "./runAnswerPipeline";

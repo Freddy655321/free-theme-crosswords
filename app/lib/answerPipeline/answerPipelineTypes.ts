@@ -1,3 +1,5 @@
+import type { RawAnswerBank, WordCandidate } from "@/app/lib/crosswordTypes";
+
 export type CspBankAuditRejectedSample = {
   answer: string;
   reason: string;
@@ -207,3 +209,125 @@ export type RunRobustAnswerTopUpInput = {
   normalizeKey: (answer: string) => string;
   requestBatch: (request: RobustAnswerTopUpBatchRequest) => Promise<string[]>;
 };
+
+export type AnswerbankTextResultLike = {
+  text: string;
+  model: string;
+  finishReason?: string;
+  usedWebSearch: boolean;
+  trustedAnswers?: string[];
+  coreAnswers?: string[];
+  contextAnswers?: string[];
+};
+
+export type LocalSupportWord = {
+  answer: string;
+  thematic: boolean;
+};
+
+export type ValidateThematicAnswersInput = {
+  answers: string[];
+};
+
+export type LengthBalancedTopUpInput = {
+  existing: string[];
+  desiredByLength: Map<number, number>;
+};
+
+export type RobustTopUpInput = {
+  existing: string[];
+  need: number;
+};
+
+export type SupportWordsInput = {
+  existing: string[];
+};
+
+export type BuildCandidatePoolInput = {
+  theme: string;
+  normalizedAnswerBank: RawAnswerBank;
+  size: number;
+  placementThemeSet: Set<string>;
+  supportWords: string[];
+  localSupportWords: LocalSupportWord[];
+  language: AnswerLanguage;
+};
+
+export type RunAnswerPipelinePolicies = AnswerSanitizationPolicies & {
+  isPublishableAnswerForTheme: (input: {
+    theme: string;
+    answer: string;
+    language: AnswerLanguage;
+    size: number;
+    note?: string;
+    allowContextualGeneric: boolean;
+  }) => boolean;
+  isForbiddenPublishAnswer: (answer: string) => boolean;
+  isOverGenericThemeWordForTheme: (theme: string, answer: string) => boolean;
+  isThemeCoreWord: (theme: string, answer: string) => boolean;
+};
+
+export type RunAnswerPipelineDependencies = {
+  expandGeographicCompoundAnswers: (answers: string[], maxLen: number) => string[];
+  inferLocalSupportWords: (
+    theme: string,
+    size: number,
+    notesByAnswer: Map<string, string>
+  ) => LocalSupportWord[];
+  validateThematicAnswers: (input: ValidateThematicAnswersInput) => Promise<string[]>;
+  topUpAnswers: (input: RobustTopUpInput) => Promise<string[]>;
+  generateLengthBalancedThematicAnswers: (input: LengthBalancedTopUpInput) => Promise<string[]>;
+  generateSupportWords: (input: SupportWordsInput) => Promise<string[]>;
+  rankSemanticSupportWords: () => Promise<string[]>;
+  buildCandidatePoolFromAnswers: (input: BuildCandidatePoolInput) => WordCandidate[];
+  minPublishEntriesForSize: (size: number) => number;
+  now: () => number;
+  warn: (message: string, payload?: Record<string, unknown>) => void;
+  recordAuditDistribution: (
+    report: CspBankAuditReport,
+    stage: string,
+    values: Iterable<string>
+  ) => void;
+  errorSummary: (error: unknown) => string;
+};
+
+export type RunAnswerPipelineInput = {
+  answerbankTextResult: AnswerbankTextResultLike;
+  theme: string;
+  language: AnswerLanguage;
+  size: number;
+  attempt: number;
+  deadlineMs: number;
+  targetAnswers: number;
+  enableSemanticSupport11: boolean;
+  fillerWords: readonly string[];
+  policies: RunAnswerPipelinePolicies;
+  dependencies: RunAnswerPipelineDependencies;
+};
+
+export type RunAnswerPipelineSkipResult = {
+  status: "skip";
+  reason: "answerbank-parse-failed" | "not-enough-clean-answers";
+  issue: string;
+  cspBankAuditReport?: CspBankAuditReport;
+};
+
+export type RunAnswerPipelineSuccessResult = {
+  status: "ok";
+  cspBankAuditReport: CspBankAuditReport;
+  notesByAnswer: Map<string, string>;
+  cleanAnswers: string[];
+  validated: string[];
+  thematicKeepSet: Set<string>;
+  publishThemeSet: Set<string>;
+  placementThemeSet: Set<string>;
+  normalizedAnswerBank: RawAnswerBank;
+  rawPool: WordCandidate[];
+  supportWords: string[];
+  localSupportWords: LocalSupportWord[];
+  lastAnswerStats: AnswerBankStats;
+};
+
+export type RunAnswerPipelineResult =
+  | RunAnswerPipelineSkipResult
+  | RunAnswerPipelineSuccessResult;

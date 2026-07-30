@@ -36,20 +36,14 @@ import {
   shuffleInPlace,
 } from "@/app/lib/crosswordUtils";
 import {
-  createCspBankAuditReport,
   cspBankAuditCandidateDistribution,
   cspBankAuditDistribution,
   cspBankAuditMergeCounts,
   cspBankAuditRejectedBySet,
   cspBankAuditSetDistribution as recordCspBankAuditSetDistribution,
-  applyValidatedAnswersToCleanBank,
-  buildPrePoolAnswerBankState,
-  buildThematicKeepSet,
-  mergeExpandedAnswers,
-  parseUsableAnswerBankText,
   runRobustAnswerTopUp,
+  runAnswerPipeline,
   sanitizeAnswerListWithPolicies,
-  sanitizeInitialAnswerBank,
   type CspBankAuditReport,
 } from "@/app/lib/answerPipeline";
 import {
@@ -11013,43 +11007,16 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const rawAnswersText = answerbankTextResult.text;
-      console.warn("[generate-crossword] answerbank raw", {
-        attempt,
-        model: answerbankTextResult.model,
-        finish_reason: answerbankTextResult.finishReason,
-        usedWebSearch: answerbankTextResult.usedWebSearch,
-        rawText_len: rawAnswersText.length,
-        rawText_head: rawAnswersText.slice(0, 250),
-        rawText_tail: rawAnswersText.slice(-200),
-      });
-
-      const { usableParsedAnswers } = parseUsableAnswerBankText(rawAnswersText);
-
-      if (!usableParsedAnswers || !Array.isArray(usableParsedAnswers.answers)) {
-        lastAnswerbankIssue = `answerbank parse failed; chars=${rawAnswersText.length}; finish=${answerbankTextResult.finishReason ?? "unknown"}`;
-        console.warn("[generate-crossword] skip: answerbank parse failed", { attempt });
-        continue;
-      }
-
-      const cspBankAuditReport = createCspBankAuditReport(theme, language, n);
-      cspBankAuditReport.initialRawCount = usableParsedAnswers.answers.length;
-      cspBankAuditSetDistribution(
-        cspBankAuditReport,
-        "raw-openai-answers",
-        usableParsedAnswers.answers.map((answer) => String(answer ?? ""))
-      );
-
-      const {
-        notesByAnswer,
-        rawNormalizedAnswers,
-        cleanAnswers,
-      } = sanitizeInitialAnswerBank({
-        parsedBank: usableParsedAnswers,
+      const answerPipelineResult = await runAnswerPipeline({
+        answerbankTextResult,
         theme,
         language,
         size: n,
-        report: cspBankAuditReport,
+        attempt,
+        deadlineMs,
+        targetAnswers: TARGET_ANSWERS,
+        enableSemanticSupport11: process.env.ENABLE_SEMANTIC_SUPPORT_11 === "1",
+        fillerWords: language === "es" ? SPANISH_FILLER_WORDS : FILLER_WORDS,
         policies: {
           asciiAnswerPattern: ASCII_A_TO_Z,
           bannedAnswers: BANNED_ANSWERS,
@@ -11058,558 +11025,104 @@ export async function POST(req: NextRequest) {
           isLikelyBadAnswer,
           noteLooksWeakThematicContext,
           minEntryLenForSize,
+          isPublishableAnswerForTheme,
+          isForbiddenPublishAnswer,
+          isOverGenericThemeWordForTheme,
+          isThemeCoreWord,
         },
-        recordDistribution: cspBankAuditSetDistribution,
-      });
-      mergeExpandedAnswers({
-        target: cleanAnswers,
-        source: rawNormalizedAnswers,
-        size: n,
-        expandAnswers: expandGeographicCompoundAnswers,
-        acceptExpanded: (answer) => {
-          if (!answerLanguageLooksValidForPuzzle(answer, language)) return false;
-          if (isLikelyBadAnswer(answer) && !ALWAYS_ALLOW_ANSWERS.has(answer)) return false;
-          return true;
-        },
-      });
-
-      const topUpTarget =
-        n === 11
-          ? Math.max(cleanAnswers.length, 90)
-          : TARGET_ANSWERS;
-      const topUpRounds =
-        n === 11
-          ? 0
-          : cleanAnswers.length < 40
-            ? 1
-            : 0;
-      for (let t = 0; t < topUpRounds && cleanAnswers.length < topUpTarget; t++) {
-        const need = Math.min(n === 11 ? 45 : 18, topUpTarget - cleanAnswers.length);
-        const more =
-          n === 11
-            ? await topUpAnswers({
-                client,
-                theme,
-                language,
-                size: n,
-                existing: cleanAnswers,
-                need,
-                attempt,
-                answerbankModel: ANSWERBANK_MODEL,
-                answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
-                sanitizeAnswerList,
-              })
-            : await topUpAnswersRobust({
-                client,
-                theme,
-                language,
-                size: n,
-                existing: cleanAnswers,
-                need,
-                attempt,
-              });
-
-        for (const a of more) {
-          if (cleanAnswers.length >= topUpTarget) break;
-          if (!cleanAnswers.includes(a)) {
-            cleanAnswers.push(a);
-          }
-        }
-      }
-
-      mergeExpandedAnswers({
-        target: cleanAnswers,
-        source: cleanAnswers,
-        size: n,
-        expandAnswers: expandGeographicCompoundAnswers,
-      });
-      cspBankAuditSetDistribution(cspBankAuditReport, "after-general-topups", cleanAnswers);
-
-      // Minimum clean answers required
-const minClean = n === 9 ? 16 : n === 11 ? minPublishEntriesForSize(n) : 26;
-
-      // Validate even 11x11 banks: publishing hallucinated "theme" words is worse
-      // than spending one bounded anti-hallucination pass.
-      let validated: string[];
-      const structuredTrustedSet = new Set(answerbankTextResult.trustedAnswers ?? []);
-      if (n === 11) {
-        try {
-          cspBankAuditSetDistribution(cspBankAuditReport, "sent-to-validateThematicAnswers", cleanAnswers);
-          const modelValidated = await validateThematicAnswers({
-            client,
-            theme,
-            language,
-            size: n,
-            answers: cleanAnswers,
-            attempt,
-          });
-          cspBankAuditRejectedBySet(
-            cspBankAuditReport,
-            "validateThematicAnswers",
-            cleanAnswers,
-            modelValidated,
-            "failed-thematic-validation"
-          );
-          validated = modelValidated.filter((answer) =>
-            isPublishableAnswerForTheme({
-              theme,
-              answer,
-              language,
-              size: n,
-              note: notesByAnswer.get(answer),
-              allowContextualGeneric: false,
-            })
-          );
-          cspBankAuditRejectedBySet(
-            cspBankAuditReport,
-            "post-thematic-publishable-filter",
-            modelValidated,
-            validated,
-            "likely-bad-answer"
-          );
-        } catch (error: unknown) {
-          console.warn("[generate-crossword] validate failed; falling back to local theme filter", {
-            attempt,
-            name: error instanceof Error ? error.name : "unknown",
-            msg: error instanceof Error ? error.message : String(error),
-          });
-          validated = cleanAnswers.filter((answer) => {
-            if (
-              !isPublishableAnswerForTheme({
-                theme,
-                answer,
-                language,
-                size: n,
-                note: notesByAnswer.get(answer),
-                allowContextualGeneric: false,
-              })
-            ) {
-              return false;
-            }
-            if (isForbiddenPublishAnswer(answer)) return false;
-            if (isOverGenericThemeWordForTheme(theme, answer)) return false;
-            const note = notesByAnswer.get(answer);
-            const usefulNote = Boolean(
-              note && note.trim().length >= 8 && !noteLooksWeakThematicContext(note, language)
-            );
-            return usefulNote || isThemeCoreWord(theme, answer);
-          });
-          cspBankAuditRejectedBySet(
-            cspBankAuditReport,
-            "validateThematicAnswers",
-            cleanAnswers,
-            validated,
-            "other"
-          );
-        }
-      } else {
-        try {
-          cspBankAuditSetDistribution(cspBankAuditReport, "sent-to-validateThematicAnswers", cleanAnswers);
-          validated = await validateThematicAnswers({
-            client,
-            theme,
-            language,
-            size: n,
-            answers: cleanAnswers,
-            attempt,
-          });
-          cspBankAuditRejectedBySet(
-            cspBankAuditReport,
-            "validateThematicAnswers",
-            cleanAnswers,
-            validated,
-            "failed-thematic-validation"
-          );
-        } catch (error: unknown) {
-          console.warn("[generate-crossword] validate failed; falling back to local theme filter", {
-            attempt,
-            name: error instanceof Error ? error.name : "unknown",
-            msg: error instanceof Error ? error.message : String(error),
-          });
-          validated = cleanAnswers.filter((answer) => {
-            if (isForbiddenPublishAnswer(answer)) return false;
-            if (isOverGenericThemeWordForTheme(theme, answer)) return false;
-            const note = notesByAnswer.get(answer);
-            const usefulNote = Boolean(
-              note && note.trim().length >= 8 && !noteLooksWeakThematicContext(note, language)
-            );
-            return usefulNote || isThemeCoreWord(theme, answer);
-          });
-          cspBankAuditRejectedBySet(
-            cspBankAuditReport,
-            "validateThematicAnswers",
-            cleanAnswers,
-            validated,
-            "other"
-          );
-        }
-      }
-      cspBankAuditSetDistribution(cspBankAuditReport, "accepted-by-validateThematicAnswers", validated);
-      cspBankAuditReport.validatedCount = validated.length;
-
-      if (
-        n === 11 &&
-        answerbankTextResult.finishReason !== "structured-length-buckets" &&
-        cleanAnswers.length < 70 &&
-        Date.now() < deadlineMs - 20_000
-      ) {
-        const targetByLength = new Map<number, number>([
-          [3, 4],
-          [4, 10],
-          [5, 12],
-          [6, 10],
-          [7, 12],
-          [8, 10],
-        ]);
-        const validatedCountByLength = validated.reduce((counts, answer) => {
-          counts.set(answer.length, (counts.get(answer.length) ?? 0) + 1);
-          return counts;
-        }, new Map<number, number>());
-        const desiredByLength = new Map<number, number>();
-        for (const [len, target] of targetByLength) {
-          const deficit = Math.max(0, target - (validatedCountByLength.get(len) ?? 0));
-          if (deficit > 0) desiredByLength.set(len, Math.min(deficit + 3, 14));
-        }
-
-        if (desiredByLength.size > 0) {
-          try {
-            const balancedAnswers = await generateLengthBalancedThematicAnswers({
+        dependencies: {
+          expandGeographicCompoundAnswers,
+          inferLocalSupportWords,
+          validateThematicAnswers: ({ answers }) =>
+            validateThematicAnswers({
               client,
               theme,
               language,
               size: n,
-              existing: cleanAnswers,
+              answers,
+              attempt,
+            }),
+          topUpAnswers: ({ existing, need }) =>
+            topUpAnswersRobust({
+              client,
+              theme,
+              language,
+              size: n,
+              existing,
+              need,
+              attempt,
+            }),
+          generateLengthBalancedThematicAnswers: ({ existing, desiredByLength }) =>
+            generateLengthBalancedThematicAnswers({
+              client,
+              theme,
+              language,
+              size: n,
+              existing,
               desiredByLength,
               attempt,
               answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
               sanitizeAnswerList,
               normalizeAnswer,
-            });
-            const balancedValidated =
-              balancedAnswers.length > 0
-                ? await validateThematicAnswers({
-                    client,
-                    theme,
-                    language,
-                    size: n,
-                    answers: balancedAnswers,
-                    attempt,
-                  })
-                : [];
-            const publishableBalanced = balancedValidated.filter((answer) =>
-              isPublishableAnswerForTheme({
-                theme,
-                answer,
-                language,
-                size: n,
-                note: notesByAnswer.get(answer),
-                allowContextualGeneric: false,
-              })
-            );
-
-            for (const answer of balancedAnswers) {
-              if (!cleanAnswers.includes(answer)) cleanAnswers.push(answer);
-            }
-            validated = Array.from(new Set([...validated, ...publishableBalanced]));
-            cspBankAuditSetDistribution(cspBankAuditReport, "length-balanced-topup-raw", balancedAnswers);
-            cspBankAuditRejectedBySet(
-              cspBankAuditReport,
-              "length-balanced-topup-validation",
-              balancedAnswers,
-              publishableBalanced,
-              "failed-thematic-validation"
-            );
-            cspBankAuditSetDistribution(cspBankAuditReport, "after-length-balanced-topup", validated);
-
-            console.warn("[generate-crossword] length-balanced topup validated", {
-              attempt,
-              generated: balancedAnswers.length,
-              kept: publishableBalanced.length,
-              validatedByLength: Object.fromEntries(
-                validated.reduce((counts, answer) => {
-                  counts.set(answer.length, (counts.get(answer.length) ?? 0) + 1);
-                  return counts;
-                }, new Map<number, number>())
-              ),
-            });
-          } catch (error: unknown) {
-            console.warn("[generate-crossword] length-balanced topup failed", {
-              attempt,
-              name: error instanceof Error ? error.name : "unknown",
-              msg: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-      }
-
-      const validationTarget = n === 11 ? 60 : 36;
-      const validationTopUpRounds = n === 11 ? 0 : 1;
-      for (
-        let validationRound = 0;
-        validationRound < validationTopUpRounds &&
-        validated.length < validationTarget &&
-        Date.now() < deadlineMs - 25_000;
-        validationRound++
-      ) {
-        const extraNeed = Math.min(n === 11 ? 40 : 48, validationTarget - validated.length);
-        const extraAnswers = await topUpAnswersRobust({
-          client,
-          theme,
-          language,
-          size: n,
-          existing: cleanAnswers,
-          need: extraNeed,
-          attempt,
-        });
-
-        const appended: string[] = [];
-        for (const answer of extraAnswers) {
-          if (validated.includes(answer)) continue;
-          if (!cleanAnswers.includes(answer)) cleanAnswers.push(answer);
-          appended.push(answer);
-        }
-
-        if (appended.length > 0) {
-          const extraValidated = await validateThematicAnswers({
-            client,
-            theme,
-            language,
-            size: n,
-            answers: appended,
-            attempt,
-          });
-          validated = Array.from(new Set([...validated, ...extraValidated])).filter((answer) =>
-            isPublishableAnswerForTheme({
-              theme,
-              answer,
-              language,
-              size: n,
-              note: notesByAnswer.get(answer),
-              allowContextualGeneric: false,
-            })
-          );
-          console.warn("[generate-crossword] validate: post-validation topup", {
-            attempt,
-            validationRound,
-            appended: appended.length,
-            extraValidated: extraValidated.length,
-            validated: validated.length,
-          });
-        }
-        if (appended.length === 0) break;
-      }
-
-      cspBankAuditSetDistribution(cspBankAuditReport, "after-all-general-and-validation-topups", validated);
-
-      const thematicKeepSet = buildThematicKeepSet({
-        validated,
-        contextAnswers: answerbankTextResult.contextAnswers ?? [],
-        structuredTrustedSet,
-        notesByAnswer,
-        language,
-        size: n,
-        cleanAnswers,
-        expandAnswers: expandGeographicCompoundAnswers,
-        policies: { noteLooksWeakThematicContext },
-      });
-      lastAnswerStats = {
-        cleanCount: cleanAnswers.length,
-        cleanSample: cleanAnswers.slice(0, 30),
-        validatedCount: validated.length,
-        validatedSample: validated.slice(0, 30),
-        thematicKeepCount: thematicKeepSet.size,
-        thematicKeepSample: Array.from(thematicKeepSet).slice(0, 30),
-      };
-
-      const validationApplyResult = applyValidatedAnswersToCleanBank({
-        cleanAnswers,
-        validated,
-        size: n,
-        minClean,
-        targetAnswers: TARGET_ANSWERS,
-      });
-      if (validationApplyResult.applied) {
-        console.warn("[generate-crossword] validate: applied", {
-          attempt,
-          keep: validated.length,
-          finalCount: validationApplyResult.finalCount,
-          minClean,
-          minKeepToApply: validationApplyResult.minKeepToApply,
-        });
-      } else {
-        console.warn("[generate-crossword] validate: keep too small, skipping prune", {
-          attempt,
-          keep: validated.length,
-          minKeepToApply: validationApplyResult.minKeepToApply,
-          cleanBefore: validationApplyResult.cleanBefore,
-        });
-      }
-
-      if (cleanAnswers.length < minClean) {
-        lastAnswerbankIssue = `not enough clean answers after sanitize/topup; clean=${cleanAnswers.length}; min=${minClean}`;
-        console.warn("[generate-crossword] skip: not enough clean answers after sanitize/topup", {
-          attempt,
-          cleanCount: cleanAnswers.length,
-          minClean,
-        });
-        continue;
-      }
-
-      let supportWords: string[] =
-        n === 11
-          ? (answerbankTextResult.contextAnswers ?? []).filter((answer) =>
-              structuredTrustedSet.has(answer)
-            )
-          : [];
-
-      if (Date.now() < deadlineMs - (n === 11 ? 35_000 : 2_500)) {
-        try {
-          supportWords = (await generateSupportWords({
-            client,
-            theme,
-            language,
-            size: n,
-            existing: cleanAnswers,
-            attempt,
-            answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
-            sanitizeAnswerList,
-          })).filter(
-            (a) =>
-              !isLikelyBadAnswer(a) &&
-              !isForbiddenPublishAnswer(a)
-          );
-        } catch (e: unknown) {
-          console.warn("[generate-crossword] support generation failed", {
-            attempt,
-            name: e instanceof Error ? e.name : "unknown",
-            msg: e instanceof Error ? e.message : String(e),
-          });
-        }
-      }
-
-      if (n === 11 && supportWords.length > 0) {
-        for (const answer of supportWords) {
-          if (isForbiddenPublishAnswer(answer)) continue;
-          if (isLikelyBadAnswer(answer) && !ALWAYS_ALLOW_ANSWERS.has(answer)) continue;
-          if (!answerLanguageLooksValidForPuzzle(answer, language)) continue;
-          if (!notesByAnswer.has(answer)) {
-            notesByAnswer.set(
-              answer,
-              language === "es"
-                ? `Vocabulario concreto del dominio tematico de ${theme}.`
-                : `Concrete domain vocabulary for the theme ${theme}.`
-            );
-          }
-          thematicKeepSet.add(answer);
-        }
-        console.warn("[generate-crossword] contextual support admitted", {
-          attempt,
-          count: supportWords.length,
-          sample: supportWords.slice(0, 30),
-        });
-      }
-
-      if (n === 11 && supportWords.length > 0) {
-        try {
-          const validatedSupportWords = (
-            await validateThematicAnswers({
+            }),
+          generateSupportWords: ({ existing }) =>
+            generateSupportWords({
               client,
               theme,
               language,
               size: n,
-              answers: supportWords.slice(0, 60),
+              existing,
               attempt,
-            })
-          ).filter((answer) =>
-            isPublishableAnswerForTheme({
+              answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
+              sanitizeAnswerList,
+            }),
+          rankSemanticSupportWords: () =>
+            rankSemanticSupportWords({
+              client,
               theme,
-              answer,
               language,
               size: n,
-              note: notesByAnswer.get(answer),
-              allowContextualGeneric: true,
-            })
-          );
-          for (const answer of validatedSupportWords) {
-            thematicKeepSet.add(answer);
-          }
-          console.warn("[generate-crossword] validated contextual support", {
-            attempt,
-            requested: Math.min(supportWords.length, 60),
-            kept: validatedSupportWords.length,
-            byLength: Object.fromEntries(
-              validatedSupportWords.reduce((counts, answer) => {
-                counts.set(answer.length, (counts.get(answer.length) ?? 0) + 1);
-                return counts;
-              }, new Map<number, number>())
+            }),
+          buildCandidatePoolFromAnswers: ({
+            theme: poolTheme,
+            normalizedAnswerBank,
+            size: poolSize,
+            placementThemeSet,
+            supportWords,
+            localSupportWords,
+            language: poolLanguage,
+          }) =>
+            buildCandidatePoolFromAnswers(
+              poolTheme,
+              normalizedAnswerBank,
+              poolSize,
+              placementThemeSet,
+              supportWords,
+              localSupportWords,
+              poolLanguage
             ),
-          });
-        } catch (error: unknown) {
-          console.warn("[generate-crossword] contextual support validation failed", {
-            attempt,
-            msg: errorSummary(error),
-          });
-        }
+          minPublishEntriesForSize,
+          now: Date.now,
+          warn: (message, payload) => console.warn(message, payload),
+          recordAuditDistribution: cspBankAuditSetDistribution,
+          errorSummary,
+        },
+      });
+
+      if (answerPipelineResult.status === "skip") {
+        lastAnswerbankIssue = answerPipelineResult.issue;
+        continue;
       }
 
-    const localSupportWords = inferLocalSupportWords(theme, n, notesByAnswer);
-    if (
-      n === 11 &&
-      process.env.ENABLE_SEMANTIC_SUPPORT_11 === "1" &&
-      Date.now() < deadlineMs - 25_000
-    ) {
-      try {
-        const semanticSupport = await rankSemanticSupportWords({
-          client,
-          theme,
-          language,
-          size: n,
-        });
-        for (const answer of semanticSupport) {
-          localSupportWords.push({ answer, thematic: false });
-        }
-        console.warn("[generate-crossword] semantic support ranked", {
-          count: semanticSupport.length,
-          sample: semanticSupport.slice(0, 30),
-        });
-      } catch (error: unknown) {
-        console.warn("[generate-crossword] semantic support failed", {
-          msg: errorSummary(error),
-        });
-      }
-    }
-
-    const prePoolAnswerBankState = buildPrePoolAnswerBankState({
-      cleanAnswers,
-      validated,
-      thematicKeepSet,
-      theme,
-      language,
-      size: n,
-      fillerWords: language === "es" ? SPANISH_FILLER_WORDS : FILLER_WORDS,
-      policies: { isExcludedFromBroadThematicSet: isOverGenericThemeWordForTheme },
-    });
-    const publishThemeSet = prePoolAnswerBankState.thematicSets.publishThemeSet;
-    const placementThemeSet = prePoolAnswerBankState.thematicSets.placementThemeSet;
-    const normalizedAnswerBank: RawAnswerBank = prePoolAnswerBankState.normalizedAnswerBank;
-
-    const rawPool = buildCandidatePoolFromAnswers(
-      theme,
-      normalizedAnswerBank,
-      n,
-      placementThemeSet,
-      supportWords,
-      localSupportWords,
-      language
-    );
-    cspBankAuditReport.candidatePoolCount = rawPool.length;
-    cspBankAuditSetDistribution(
-      cspBankAuditReport,
-      "pool-produced-by-buildCandidatePoolFromAnswers",
-      rawPool.map((candidate) => candidate.answer)
-    );
-    cspBankAuditReport.distributions.rawPoolDistribution =
-      cspBankAuditCandidateDistribution(rawPool);
+      const {
+        cspBankAuditReport,
+        notesByAnswer,
+        thematicKeepSet,
+        publishThemeSet,
+        placementThemeSet,
+        rawPool,
+      } = answerPipelineResult;
+      lastAnswerStats = answerPipelineResult.lastAnswerStats;
 
     const cspRequiredLengths = cspRequiredLengthsFromPatterns11(CROSSWORD_PATTERNS_11);
     const cspCandidateReservoir = buildCspCandidateReservoir11({
@@ -13583,7 +13096,7 @@ console.warn("[generate-crossword] ok: pool", {
             source: "answers-then-freeform-grid-then-clues",
             ...(lastCspAttemptMeta && { cspAttempt: lastCspAttemptMeta }),
             attempt,
-            answerCount: usableParsedAnswers.answers?.length ?? 0,
+            answerCount: cspBankAuditReport.initialRawCount,
           poolCount: pool.length,
           clueCount: clueByAnswer.size,
           bland,
