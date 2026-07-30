@@ -13,7 +13,8 @@
     "app/api/generate-crossword/route.contract.test.ts",
     "app/api/generate-crossword/route.ts",
     "app/lib/**/*.ts",
-    "lib/**/*.ts"
+    "lib/**/*.ts",
+    "scripts/**/*.ts"
   ],
   "exclude": [
     "node_modules",
