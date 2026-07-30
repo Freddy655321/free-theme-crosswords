@@ -30,7 +30,6 @@ import type {
 import {
   ASCII_A_TO_Z,
   inBounds,
-  isBlock,
   makeSeededRng,
   normalizeAnswer,
   safeJson,
@@ -75,6 +74,32 @@ import {
   type ClueRequestItem as PublishClueRequestItem,
   type ClueGenerationClient,
 } from "@/app/lib/publishPipeline";
+import {
+  blockShortRunsOnly,
+  checkedCellStats,
+  crossedEntryStats,
+  crosswordDensityFromGrid,
+  desiredPublishEntriesForSize,
+  enforceMinWordLen,
+  entryCrossingStats,
+  gridToStrings,
+  hasShortLetterRuns,
+  isAcceptableGridWithPolicies,
+  keepLargestConnectedComponent,
+  maxGenericContextEntriesForPublish,
+  minCoreThematicEntriesForPublish,
+  minCrossedEntriesForPublish,
+  minCrossingsPerEntryForPublish,
+  minEntriesForSize,
+  minEntryLenForSize,
+  minPublishEntriesForSize,
+  minThematicEntriesForPublish,
+  paintBlocks,
+  pruneDanglingRuns,
+  pruneWeakEntriesPreservingCrosses,
+  sanitizeUncheckedGrid,
+  shortRunCellKeys,
+} from "@/app/lib/gridValidation";
 
 export const runtime = "nodejs";
 
@@ -133,330 +158,6 @@ function errorSummary(error: unknown): string {
       : "";
 
   return causeCode ? `${error.name}: ${error.message} (${causeCode})` : `${error.name}: ${error.message}`;
-}
-
-function crosswordDensityFromGrid(grid: string[][]): number {
-  const n = grid.length;
-  let letters = 0;
-  const total = n * n;
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      if (!isBlock(grid[r][c])) letters++;
-    }
-  }
-  return total > 0 ? letters / total : 0;
-}
-
-function checkedCellStats(grid: string[][], minLen: number) {
-  const n = grid.length;
-
-  const runLenAcrossAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c)) return 0;
-    if (isBlock(grid[r][c])) return 0;
-
-    let start = c;
-    while (start - 1 >= 0 && !isBlock(grid[r][start - 1])) start--;
-
-    let end = c;
-    while (end + 1 < n && !isBlock(grid[r][end + 1])) end++;
-
-    return end - start + 1;
-  };
-
-  const runLenDownAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c)) return 0;
-    if (isBlock(grid[r][c])) return 0;
-
-    let start = r;
-    while (start - 1 >= 0 && !isBlock(grid[start - 1][c])) start--;
-
-    let end = r;
-    while (end + 1 < n && !isBlock(grid[end + 1][c])) end++;
-
-    return end - start + 1;
-  };
-
-  let total = 0;
-  let checked = 0;
-
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      if (isBlock(grid[r][c])) continue;
-      total++;
-
-      const acrossLen = runLenAcrossAt(r, c);
-      const downLen = runLenDownAt(r, c);
-      if (acrossLen >= minLen && downLen >= minLen) checked++;
-    }
-  }
-
-  return {
-    total,
-    checked,
-    ratio: total > 0 ? checked / total : 0,
-  };
-}
-
-function crossedEntryStats(grid: string[][], entries: Omit<Entry, "clue">[], minLen: number) {
-  const n = grid.length;
-
-  const runLenAcrossAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c) || isBlock(grid[r][c])) return 0;
-    let start = c;
-    while (start - 1 >= 0 && !isBlock(grid[r][start - 1])) start--;
-    let end = c;
-    while (end + 1 < n && !isBlock(grid[r][end + 1])) end++;
-    return end - start + 1;
-  };
-
-  const runLenDownAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c) || isBlock(grid[r][c])) return 0;
-    let start = r;
-    while (start - 1 >= 0 && !isBlock(grid[start - 1][c])) start--;
-    let end = r;
-    while (end + 1 < n && !isBlock(grid[end + 1][c])) end++;
-    return end - start + 1;
-  };
-
-  const crossed = entries.filter((entry) => {
-    for (let i = 0; i < entry.answer.length; i++) {
-      const r = entry.direction === "down" ? entry.row + i : entry.row;
-      const c = entry.direction === "across" ? entry.col + i : entry.col;
-      if (runLenAcrossAt(r, c) >= minLen && runLenDownAt(r, c) >= minLen) return true;
-    }
-    return false;
-  }).length;
-
-  return {
-    total: entries.length,
-    crossed,
-    ratio: entries.length > 0 ? crossed / entries.length : 0,
-  };
-}
-
-function entryCrossingStats(
-  grid: string[][],
-  entries: Omit<Entry, "clue">[],
-  minLen: number
-) {
-  const n = grid.length;
-
-  const runLenAcrossAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c) || isBlock(grid[r][c])) return 0;
-    let start = c;
-    while (start - 1 >= 0 && !isBlock(grid[r][start - 1])) start--;
-    let end = c;
-    while (end + 1 < n && !isBlock(grid[r][end + 1])) end++;
-    return end - start + 1;
-  };
-
-  const runLenDownAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c) || isBlock(grid[r][c])) return 0;
-    let start = r;
-    while (start - 1 >= 0 && !isBlock(grid[start - 1][c])) start--;
-    let end = r;
-    while (end + 1 < n && !isBlock(grid[end + 1][c])) end++;
-    return end - start + 1;
-  };
-
-  const counts = entries.map((entry) => {
-    let checkedCells = 0;
-    for (let i = 0; i < entry.answer.length; i++) {
-      const r = entry.direction === "down" ? entry.row + i : entry.row;
-      const c = entry.direction === "across" ? entry.col + i : entry.col;
-      if (runLenAcrossAt(r, c) >= minLen && runLenDownAt(r, c) >= minLen) checkedCells++;
-    }
-    return {
-      answer: entry.answer,
-      checkedCells,
-    };
-  });
-
-  return {
-    minCheckedCells: counts.length > 0 ? Math.min(...counts.map((entry) => entry.checkedCells)) : 0,
-    weakEntries: counts.filter((entry) => entry.checkedCells < minCrossingsPerEntryForPublish(n)),
-    counts,
-  };
-}
-
-function minCrossingsPerEntryForPublish(size: number): number {
-  if (size <= 11) return 2;
-  return 2;
-}
-
-function sanitizeUncheckedGrid(grid: string[][], minLen: number): string[][] {
-  let blocked: Cell[][] = grid.map((row) => row.map((cell) => (cell === "#" ? "#" : cell)));
-  blocked = pruneDanglingRuns(blocked, minLen);
-  blocked = keepLargestConnectedComponent(blocked);
-  blocked = keepLargestConnectedComponent(blocked);
-
-  return blocked.map((row) =>
-    row.map((cell) => {
-      if (cell === "#") return "#";
-      return typeof cell === "string" && cell.length === 1 ? cell.toUpperCase() : "#";
-    })
-  );
-}
-
-function blockShortRunsOnly(grid: string[][], minLen: number): string[][] {
-  const n = grid.length;
-  const out = grid.map((row) => row.slice());
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    const toBlock = new Set<string>();
-
-    for (let r = 0; r < n; r++) {
-      let c = 0;
-      while (c < n) {
-        while (c < n && isBlock(out[r]?.[c] ?? "#")) c++;
-        const start = c;
-        while (c < n && !isBlock(out[r]?.[c] ?? "#")) c++;
-        const len = c - start;
-        if (len > 1 && len < minLen) {
-          for (let cc = start; cc < c; cc++) toBlock.add(`${r},${cc}`);
-        }
-      }
-    }
-
-    for (let c = 0; c < n; c++) {
-      let r = 0;
-      while (r < n) {
-        while (r < n && isBlock(out[r]?.[c] ?? "#")) r++;
-        const start = r;
-        while (r < n && !isBlock(out[r]?.[c] ?? "#")) r++;
-        const len = r - start;
-        if (len > 1 && len < minLen) {
-          for (let rr = start; rr < r; rr++) toBlock.add(`${rr},${c}`);
-        }
-      }
-    }
-
-    for (const key of toBlock) {
-      const [rRaw, cRaw] = key.split(",");
-      const r = Number(rRaw);
-      const c = Number(cRaw);
-      if (out[r]?.[c] && out[r][c] !== "#") {
-        out[r][c] = "#";
-        changed = true;
-      }
-    }
-  }
-
-  return out;
-}
-
-function shortRunCellKeys(grid: string[][], minLen: number): Set<string> {
-  const n = grid.length;
-  const keys = new Set<string>();
-
-  for (let r = 0; r < n; r++) {
-    let c = 0;
-    while (c < n) {
-      while (c < n && isBlock(grid[r]?.[c] ?? "#")) c++;
-      const start = c;
-      while (c < n && !isBlock(grid[r]?.[c] ?? "#")) c++;
-      const len = c - start;
-      if (len > 1 && len < minLen) {
-        for (let cc = start; cc < c; cc++) keys.add(`${r},${cc}`);
-      }
-    }
-  }
-
-  for (let c = 0; c < n; c++) {
-    let r = 0;
-    while (r < n) {
-      while (r < n && isBlock(grid[r]?.[c] ?? "#")) r++;
-      const start = r;
-      while (r < n && !isBlock(grid[r]?.[c] ?? "#")) r++;
-      const len = r - start;
-      if (len > 1 && len < minLen) {
-        for (let rr = start; rr < r; rr++) keys.add(`${rr},${c}`);
-      }
-    }
-  }
-
-  return keys;
-}
-
-function minEntriesForSize(size: number): number {
-  if (size <= 9) return 10;
-  if (size <= 11) return 15;
-  return 20; // 13x13
-}
-
-function minPublishEntriesForSize(size: number): number {
-  if (size <= 9) return 10;
-  if (size <= 11) return 15;
-  return 18;
-}
-
-function desiredPublishEntriesForSize(size: number): number {
-  if (size <= 9) return 12;
-  if (size <= 11) return 16;
-  return 22;
-}
-
-function minCrossedEntriesForPublish(size: number): number {
-  return minPublishEntriesForSize(size);
-}
-
-function minThematicEntriesForPublish(size: number, entryCount: number): number {
-  if (size <= 9) return 7;
-  if (size <= 11) return Math.max(8, entryCount - maxGenericContextEntriesForPublish(size, entryCount));
-  return 12;
-}
-
-function minCoreThematicEntriesForPublish(size: number, entryCount: number): number {
-  if (size <= 9) return 6;
-  if (size <= 11) {
-    if (entryCount > 20) return Math.max(10, Math.ceil(entryCount * 0.4));
-    return 8;
-  }
-  return 10;
-}
-
-function maxGenericContextEntriesForPublish(size: number, entryCount: number): number {
-  if (size <= 9) return 4;
-  if (size <= 11) {
-    if (entryCount > 20) return Math.max(5, entryCount - minCoreThematicEntriesForPublish(size, entryCount));
-    return Math.min(7, Math.max(2, Math.floor(entryCount / 2)));
-  }
-  return 8;
-}
-
-function minEntryLenForSize(size: number): number {
-  if (size <= 11) return 3;
-  return 4;
-}
-
-function hasShortLetterRuns(grid: string[][], minLen: number): boolean {
-  const n = grid.length;
-
-  for (let r = 0; r < n; r++) {
-    let c = 0;
-    while (c < n) {
-      while (c < n && isBlock(grid[r]?.[c] ?? "#")) c++;
-      const start = c;
-      while (c < n && !isBlock(grid[r]?.[c] ?? "#")) c++;
-      const len = c - start;
-      if (len > 1 && len < minLen) return true;
-    }
-  }
-
-  for (let c = 0; c < n; c++) {
-    let r = 0;
-    while (r < n) {
-      while (r < n && isBlock(grid[r]?.[c] ?? "#")) r++;
-      const start = r;
-      while (r < n && !isBlock(grid[r]?.[c] ?? "#")) r++;
-      const len = r - start;
-      if (len > 1 && len < minLen) return true;
-    }
-  }
-
-  return false;
 }
 
 function shouldRejectBestPartialForStrict11(size: number): boolean {
@@ -1426,56 +1127,14 @@ function deriveEntriesFromGrid(grid: string[][], minLen = 3): DerivedEntry[] {
 }
 
 function isAcceptable(grid: string[][], derived: Omit<Entry, "clue">[], themeSet?: Set<string>): boolean {
-  const n = grid.length;
-  if (n !== 9 && n !== 11 && n !== 13) return false;
-
-
-  const minLen = minEntryLenForSize(n);
-
-  const density = crosswordDensityFromGrid(grid);
-  if (hasShortLetterRuns(grid, minLen)) return false;
-  if (n === 11 && density < 0.4) return false;
-  if (n !== 11 && density < 0.32) return false;
-
-  const minEntries = n === 11 ? minPublishEntriesForSize(n) : minEntriesForSize(n);
-  if (derived.length < minEntries) return false;
-
-  const across = derived.filter((e) => e.direction === "across").length;
-  const down = derived.length - across;
-  if (across === 0 || down === 0) return false;
-  if (n === 11 && (across < 6 || down < 6)) return false;
-
-  const shortCount = derived.filter((e) => e.answer.length < minLen).length;
-  if (shortCount > 0) return false;
-
-  const genericAnyCount = derived.reduce(
-    (acc, e) => acc + (isOverGenericThemeWord(e.answer) ? 1 : 0),
-    0
-  );
-  if (n === 11 && genericAnyCount > 7) return false;
-
-  const checkedStats = checkedCellStats(grid, minLen);
-  const crossedStats = crossedEntryStats(grid, derived, minLen);
-  const entryCrossings = entryCrossingStats(grid, derived, minLen);
-  if (n === 11 && crossedStats.crossed < minEntries) return false;
-  if (n === 11 && entryCrossings.weakEntries.length > 0) return false;
-  if (n === 11 && checkedStats.ratio < 0.2) return false;
-
-  // Theme density gate: avoid puzzles that are mostly generic fill.
-  if (themeSet) {
-    const minTheme = n === 11 ? minThematicEntriesForPublish(n, derived.length) : n >= 13 ? 12 : n >= 9 ? 7 : 5;
-    const themedCount = derived.reduce((acc, e) => acc + (themeSet.has(e.answer) ? 1 : 0), 0);
-    if (themedCount < minTheme) return false;
-
-    const genericNonThemedCount = derived.reduce(
-      (acc, e) => acc + (!themeSet.has(e.answer) && isOverGenericThemeWord(e.answer) ? 1 : 0),
-      0
-    );
-    if (n === 11 && genericNonThemedCount > 4) return false;
-    if (n !== 11 && genericNonThemedCount > 0) return false;
-  }
-
-  return true;
+  return isAcceptableGridWithPolicies({
+    grid,
+    derived,
+    themeSet,
+    policies: {
+      isOverGenericThemeWord,
+    },
+  });
 }
 
 // -------------------- Freeform (Option B) constructor --------------------
@@ -1640,191 +1299,6 @@ function placeWord(
   }
 
   return changes;
-}
-
-function paintBlocks(grid: Cell[][]): Cell[][] {
-  const n = grid.length;
-  const out: Cell[][] = [];
-  for (let r = 0; r < n; r++) {
-    const row: Cell[] = [];
-    for (let c = 0; c < n; c++) {
-      row.push(grid[r][c] === "" ? "#" : grid[r][c]);
-    }
-    out.push(row);
-  }
-  return out;
-}
-
-/**
- * IMPORTANT:
- * The previous version aggressively deleted any short runs in either direction.
- * That can wipe the whole grid when you only have a long ACROSS seed but no DOWN
- * words yet (each letter is a 1-letter DOWN run).
- *
- * New behavior:
- * - Only turn a cell into "#" if it belongs to short runs in BOTH directions.
- *   (i.e., it is not part of a valid-length entry in either axis)
- */
-function enforceMinWordLen(blocked: Cell[][], minLen: number): Cell[][] {
-  const n = blocked.length;
-  const grid = blocked.map((row) => row.slice());
-
-  const runLenAcrossAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c)) return 0;
-    if (grid[r][c] === "#") return 0;
-
-    let cc = c;
-    while (cc - 1 >= 0 && grid[r][cc - 1] !== "#") cc--;
-    const start = cc;
-
-    while (cc + 1 < n && grid[r][cc + 1] !== "#") cc++;
-    const end = cc;
-
-    return end - start + 1;
-  };
-
-  const runLenDownAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c)) return 0;
-    if (grid[r][c] === "#") return 0;
-
-    let rr = r;
-    while (rr - 1 >= 0 && grid[rr - 1][c] !== "#") rr--;
-    const start = rr;
-
-    while (rr + 1 < n && grid[rr + 1][c] !== "#") rr++;
-    const end = rr;
-
-    return end - start + 1;
-  };
-
-  const toKill: Array<{ r: number; c: number }> = [];
-
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      if (grid[r][c] === "#") continue;
-
-      const la = runLenAcrossAt(r, c);
-      const ld = runLenDownAt(r, c);
-
-      // Kill only if the cell is not part of any "valid-length" run
-      if (la < minLen && ld < minLen) toKill.push({ r, c });
-    }
-  }
-
-  for (const cell of toKill) grid[cell.r][cell.c] = "#";
-  return grid;
-}
-
-function pruneDanglingRuns(blocked: Cell[][], minLen: number): Cell[][] {
-  const n = blocked.length;
-  const grid = blocked.map((row) => row.slice());
-
-  const runLenAcrossAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c)) return 0;
-    if (grid[r][c] === "#") return 0;
-
-    let start = c;
-    while (start - 1 >= 0 && grid[r][start - 1] !== "#") start--;
-
-    let end = c;
-    while (end + 1 < n && grid[r][end + 1] !== "#") end++;
-
-    return end - start + 1;
-  };
-
-  const runLenDownAt = (r: number, c: number): number => {
-    if (!inBounds(n, r, c)) return 0;
-    if (grid[r][c] === "#") return 0;
-
-    let start = r;
-    while (start - 1 >= 0 && grid[start - 1][c] !== "#") start--;
-
-    let end = r;
-    while (end + 1 < n && grid[end + 1][c] !== "#") end++;
-
-    return end - start + 1;
-  };
-
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    const toKill: Array<{ r: number; c: number }> = [];
-
-    for (let r = 0; r < n; r++) {
-      for (let c = 0; c < n; c++) {
-        if (grid[r][c] === "#") continue;
-
-        const la = runLenAcrossAt(r, c);
-        const ld = runLenDownAt(r, c);
-
-        if ((la > 1 && la < minLen) || (ld > 1 && ld < minLen)) {
-          toKill.push({ r, c });
-        }
-      }
-    }
-
-    if (toKill.length > 0) {
-      changed = true;
-      for (const cell of toKill) grid[cell.r][cell.c] = "#";
-    }
-  }
-
-  return grid;
-}
-
-function keepLargestConnectedComponent(blocked: Cell[][]): Cell[][] {
-  const n = blocked.length;
-  const seen = Array.from({ length: n }, () => Array.from({ length: n }, () => false));
-  const dirs = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-  ] as const;
-
-  const components: Array<Array<{ r: number; c: number }>> = [];
-
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      if (seen[r][c]) continue;
-      if (blocked[r][c] === "#") continue;
-
-      const comp: Array<{ r: number; c: number }> = [];
-      const stack = [{ r, c }];
-      seen[r][c] = true;
-
-      while (stack.length) {
-        const cur = stack.pop()!;
-        comp.push(cur);
-        for (const [dr, dc] of dirs) {
-          const rr = cur.r + dr;
-          const cc = cur.c + dc;
-          if (!inBounds(n, rr, cc)) continue;
-          if (seen[rr][cc]) continue;
-          if (blocked[rr][cc] === "#") continue;
-          seen[rr][cc] = true;
-          stack.push({ r: rr, c: cc });
-        }
-      }
-
-      components.push(comp);
-    }
-  }
-
-  if (components.length <= 1) return blocked;
-
-  components.sort((a, b) => b.length - a.length);
-  const keep = new Set(components[0].map((p) => `${p.r},${p.c}`));
-
-  const out = blocked.map((row) => row.slice());
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      if (out[r][c] === "#") continue;
-      if (!keep.has(`${r},${c}`)) out[r][c] = "#";
-    }
-  }
-  return out;
 }
 
 // -------------------- Filler pool (local, deterministic) --------------------
@@ -2601,116 +2075,6 @@ function rebuildGridFromEntriesAllowingAllowedDerived(
   if (finalDerived.some((entry) => !allowedAnswers.has(entry.answer))) return null;
 
   return { grid: final, derived: finalDerived };
-}
-
-function pruneWeakEntriesPreservingCrosses(
-  grid: string[][],
-  minLen: number,
-  minEntries: number
-): { grid: string[][]; derived: Omit<Entry, "clue">[] } | null {
-  let working = grid.map((row) => row.slice());
-
-  for (let pass = 0; pass < 8; pass++) {
-    const derived = deriveEntriesFromGrid(working, minLen);
-    if (derived.length < minEntries) return null;
-    const stats = entryCrossingStats(working, derived, minLen);
-    const checkedCellsForEntry = (entry: Omit<Entry, "clue">) => {
-      let checked = 0;
-      for (let i = 0; i < entry.answer.length; i++) {
-        const r = entry.direction === "down" ? entry.row + i : entry.row;
-        const c = entry.direction === "across" ? entry.col + i : entry.col;
-        const across = derived.some(
-          (other) =>
-            other.direction === "across" &&
-            other.row === r &&
-            c >= other.col &&
-            c < other.col + other.answer.length
-        );
-        const down = derived.some(
-          (other) =>
-            other.direction === "down" &&
-            other.col === c &&
-            r >= other.row &&
-            r < other.row + other.answer.length
-        );
-        if (across && down) checked++;
-      }
-      return checked;
-    };
-    const seenAnswers = new Set<string>();
-    const duplicateEntries = derived.filter((entry) => {
-      if (seenAnswers.has(entry.answer)) return true;
-      seenAnswers.add(entry.answer);
-      return false;
-    });
-    const weakEntries = derived.filter(
-      (entry) => checkedCellsForEntry(entry) < minCrossingsPerEntryForPublish(grid.length)
-    );
-    const targets = Array.from(new Set([...weakEntries, ...duplicateEntries]));
-    if (targets.length === 0 && stats.weakEntries.length === 0) {
-      return { grid: working, derived };
-    }
-
-    let best:
-      | {
-          grid: string[][];
-          derived: Omit<Entry, "clue">[];
-          weakCount: number;
-        }
-      | null = null;
-
-    for (const weakEntry of targets) {
-      const next = working.map((row) => row.slice());
-      for (let i = 0; i < weakEntry.answer.length; i++) {
-        const r = weakEntry.direction === "down" ? weakEntry.row + i : weakEntry.row;
-        const c = weakEntry.direction === "across" ? weakEntry.col + i : weakEntry.col;
-        const sharedByOther = derived.some((entry) => {
-          if (entry === weakEntry) return false;
-          for (let j = 0; j < entry.answer.length; j++) {
-            const otherR = entry.direction === "down" ? entry.row + j : entry.row;
-            const otherC = entry.direction === "across" ? entry.col + j : entry.col;
-            if (otherR === r && otherC === c) return true;
-          }
-          return false;
-        });
-        if (!sharedByOther) next[r][c] = "#";
-      }
-
-      const cleaned = blockShortRunsOnly(next, minLen);
-      if (hasShortLetterRuns(cleaned, minLen)) continue;
-      const nextDerived = deriveEntriesFromGrid(cleaned, minLen);
-      if (nextDerived.length < minEntries) continue;
-      const nextStats = entryCrossingStats(cleaned, nextDerived, minLen);
-      const nextDuplicateCount =
-        nextDerived.length - new Set(nextDerived.map((entry) => entry.answer)).size;
-      const currentDuplicateCount =
-        derived.length - new Set(derived.map((entry) => entry.answer)).size;
-      const currentProblemCount = stats.weakEntries.length + currentDuplicateCount;
-      const nextProblemCount = nextStats.weakEntries.length + nextDuplicateCount;
-      if (nextProblemCount >= currentProblemCount) continue;
-
-      if (
-        !best ||
-        nextProblemCount < best.weakCount ||
-        (nextProblemCount === best.weakCount &&
-          nextDerived.length > best.derived.length)
-      ) {
-        best = {
-          grid: cleaned,
-          derived: nextDerived,
-          weakCount: nextProblemCount,
-        };
-      }
-    }
-
-    if (!best) return null;
-    working = best.grid;
-  }
-
-  const derived = deriveEntriesFromGrid(working, minLen);
-  if (derived.length < minEntries) return null;
-  if (entryCrossingStats(working, derived, minLen).weakEntries.length > 0) return null;
-  return { grid: working, derived };
 }
 
 function specificThematicFallbackClue(theme: string, answer: string, language: "es" | "en"): string | null {
@@ -4141,18 +3505,6 @@ function inferLocalSupportWords(
   }
 
   return out;
-}
-
-function gridToStrings(grid: (string | null)[][]): string[][] {
-  return grid.map((row) =>
-    row.map((cell) => {
-      if (typeof cell === "string" && cell.length === 1) {
-        if (/[a-z]/.test(cell)) return cell.toUpperCase();
-        if (/[A-Z0-9]/.test(cell)) return cell;
-      }
-      return "#";
-    })
-  );
 }
 
 function buildCandidatePoolFromAnswers(
