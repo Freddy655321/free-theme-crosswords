@@ -193,3 +193,17 @@ export type RequestAnswerTopUpResult = {
   salvagedAnswers: string[];
   cleanedAnswers: string[];
 };
+
+export type RobustAnswerTopUpBatchRequest = {
+  existing: string[];
+  need: number;
+  tryIndex: number;
+};
+
+export type RunRobustAnswerTopUpInput = {
+  existing: readonly string[];
+  need: number;
+  size: number;
+  normalizeKey: (answer: string) => string;
+  requestBatch: (request: RobustAnswerTopUpBatchRequest) => Promise<string[]>;
+};

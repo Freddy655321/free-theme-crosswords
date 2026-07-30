@@ -49,6 +49,7 @@ import {
   mergeExpandedAnswers,
   parseUsableAnswerBankText,
   requestAnswerTopUp,
+  runRobustAnswerTopUp,
   sanitizeAnswerListWithPolicies,
   sanitizeInitialAnswerBank,
   type CspBankAuditReport,
@@ -3865,38 +3866,13 @@ async function topUpAnswersRobust(opts: {
   need: number;
   attempt: number;
 }) {
-  const { need } = opts;
-
-  // The model can get truncated when asked for too many tokens/answers at once.
-  // We therefore top-up in smaller chunks and progressively reduce the chunk size
-  // if parsing/sanitization yields nothing.
-  const out: string[] = [];
-  const seen = new Set<string>(opts.existing.map((a) => normalizeAnswer(a)));
-
-  let chunk = Math.min(opts.size === 11 ? 18 : 24, need);
-  const maxTries = opts.size === 11 ? 4 : 4;
-  for (let tries = 0; tries < maxTries && out.length < need; tries++) {
-    const want = Math.min(chunk, need - out.length);
-
-    const more = await topUpAnswers({ ...opts, existing: Array.from(seen), need: want });
-
-    if (more.length === 0) {
-      // Backoff: ask for fewer answers next time to avoid truncation.
-      chunk = Math.max(5, Math.floor(chunk / 2));
-      continue;
-    }
-
-    for (const a of more) {
-      const norm = normalizeAnswer(a);
-      if (!norm) continue;
-      if (seen.has(norm)) continue;
-      seen.add(norm);
-      out.push(norm);
-      if (out.length >= need) break;
-    }
-  }
-
-  return out;
+  return runRobustAnswerTopUp({
+    existing: opts.existing,
+    need: opts.need,
+    size: opts.size,
+    normalizeKey: normalizeAnswer,
+    requestBatch: ({ existing, need }) => topUpAnswers({ ...opts, existing, need }),
+  });
 }
 
 async function generateLengthBalancedThematicAnswers(opts: {
