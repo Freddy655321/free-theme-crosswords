@@ -3,19 +3,7 @@ import OpenAI from "openai";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  buildCspCrossword11ForEndpoint,
-  isCsp11Enabled,
-  shouldUseCspDiagnosticOnly,
-} from "@/app/lib/buildCspCrossword11";
-import { requestCspConstraintTopUpAnswers11 } from "@/app/lib/crosswordCspConstraintTopUp11";
-import { requestCspLengthTopUpAnswers11 } from "@/app/lib/crosswordCspTopUp11";
-import { buildCspCandidateReservoir11, cspRequiredLengthsFromPatterns11 } from "@/app/lib/buildCspCandidateReservoir11";
-import {
-  buildHybridCspCandidateReservoir11,
-  loadLocalSupportCandidates11,
-} from "@/app/lib/buildHybridCspCandidateReservoir11";
-import { CROSSWORD_PATTERNS_11 } from "@/app/lib/crosswordPatterns11";
+import { isCsp11Enabled, shouldUseCspDiagnosticOnly } from "@/app/lib/buildCspCrossword11";
 import type {
   Cell,
   Crossword,
@@ -36,15 +24,16 @@ import {
 } from "@/app/lib/crosswordUtils";
 import {
   cspBankAuditCandidateDistribution,
-  cspBankAuditDistribution,
-  cspBankAuditMergeCounts,
   cspBankAuditRejectedBySet,
-  cspBankAuditSetDistribution as recordCspBankAuditSetDistribution,
   runRobustAnswerTopUp,
   runAnswerPipeline,
   sanitizeAnswerListWithPolicies,
-  type CspBankAuditReport,
 } from "@/app/lib/answerPipeline";
+import {
+  cspBankAuditSetDistribution,
+  prepareCspOrchestration,
+  runCspOrchestration,
+} from "@/app/lib/cspOrchestration";
 import {
   buildAnswerbankPrompt,
   buildAnswerbankRequest,
@@ -1899,42 +1888,6 @@ function sanitizeAnswerList(raw: unknown, maxLen: number, language?: "es" | "en"
     answerLanguageLooksValidForPuzzle,
     isLikelyBadAnswer,
   });
-}
-
-function cspBankAuditLog(label: string, payload: Record<string, unknown>) {
-  console.warn(`[csp-bank-audit] ${label} ${JSON.stringify(payload)}`);
-}
-
-function cspDiagnosticLog(label: string, payload: Record<string, unknown>) {
-  console.warn(`[csp-diagnostic] ${label} ${JSON.stringify(payload)}`);
-}
-
-function cspHybridDiagnosticLog(label: string, payload: Record<string, unknown>) {
-  console.warn(`[csp-hybrid-diagnostic] ${label} ${JSON.stringify(payload)}`);
-}
-
-function cspSearchProfileLog(payload: Record<string, unknown>) {
-  console.warn(`[csp-search-profile] ${JSON.stringify(payload)}`);
-}
-
-function cspSearchCausalityLog(payload: Record<string, unknown>) {
-  console.warn(`[csp-search-causality] ${JSON.stringify(payload)}`);
-}
-
-function cspWipeoutCausalityLog(payload: Record<string, unknown>) {
-  console.warn(`[csp-wipeout-causality] ${JSON.stringify(payload)}`);
-}
-
-function cspBranchingDiagnosticLog(payload: Record<string, unknown>) {
-  console.warn(`[csp-branching-diagnostic] ${JSON.stringify(payload)}`);
-}
-
-function cspValueOrderingDiagnosticLog(payload: Record<string, unknown>) {
-  console.warn(`[csp-value-ordering-diagnostic] ${JSON.stringify(payload)}`);
-}
-
-function cspBankAuditSetDistribution(report: CspBankAuditReport, stage: string, values: Iterable<string>) {
-  recordCspBankAuditSetDistribution(report, stage, values, cspBankAuditLog);
 }
 
 function expandGeographicCompoundAnswers(answers: string[], maxLen: number): string[] {
@@ -8185,54 +8138,15 @@ export async function POST(req: NextRequest) {
       } = answerPipelineResult;
       lastAnswerStats = answerPipelineResult.lastAnswerStats;
 
-    const cspRequiredLengths = cspRequiredLengthsFromPatterns11(CROSSWORD_PATTERNS_11);
-    const cspCandidateReservoir = buildCspCandidateReservoir11({
-      candidates: rawPool,
-      thematicKeep: thematicKeepSet,
+    const cspOrchestrationPrepared = prepareCspOrchestration({
       theme,
-      requiredLengths: cspRequiredLengths,
+      language,
+      attempt,
+      rawPool,
+      thematicKeepSet,
+      cspBankAuditReport,
+      hybridDiagnostic: csp11HybridDiagnostic,
     });
-    const hybridCspCandidateReservoir = csp11HybridDiagnostic
-      ? buildHybridCspCandidateReservoir11({
-          thematicCandidates: cspCandidateReservoir.candidates.map((candidate) => ({
-            answer: candidate.answer,
-            thematic: true,
-            source: candidate.source,
-            kind: "thematic",
-          })),
-          supportCandidates: loadLocalSupportCandidates11({
-            language,
-            requiredLengths: cspRequiredLengths,
-          }),
-          theme,
-          requiredLengths: cspRequiredLengths,
-        })
-      : null;
-    cspBankAuditReport.distributions.cspReservoirDistribution = Object.fromEntries(
-      Object.entries(cspCandidateReservoir.distributionByLength).map(([key, value]) => [String(key), value])
-    );
-    cspBankAuditLog("csp-reservoir", {
-      total: cspCandidateReservoir.candidates.length,
-      distributionByLength: cspCandidateReservoir.distributionByLength,
-      excludedCount: cspCandidateReservoir.excluded.length,
-      excludedByReason: cspCandidateReservoir.excluded.reduce<Record<string, number>>((acc, item) => {
-        acc[item.reason] = (acc[item.reason] ?? 0) + 1;
-        return acc;
-      }, {}),
-      acceptedSample: cspCandidateReservoir.candidates.slice(0, 20).map((candidate) => candidate.answer),
-      rejectedSample: cspCandidateReservoir.excluded.slice(0, 20),
-    });
-    if (hybridCspCandidateReservoir) {
-      cspHybridDiagnosticLog("reservoir-ready", {
-        theme,
-        language,
-        attempt,
-        total: hybridCspCandidateReservoir.candidates.length,
-        thematicCountsByLength: hybridCspCandidateReservoir.thematicCountsByLength,
-        supportCountsByLength: hybridCspCandidateReservoir.supportCountsByLength,
-        totalCountsByLength: hybridCspCandidateReservoir.totalCountsByLength,
-      });
-    }
 
     const placementCoreThemeSet =
       n === 11 ? new Set(placementThemeSet) : placementThemeSet;
@@ -8428,475 +8342,49 @@ console.warn("[generate-crossword] ok: pool", {
       lastAttemptPool = pool;
       const seed = (theme.length * 2654435761 + n * 1013 + attempt * 9176) >>> 0;
       let cspBuilt: { grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> } | null = null;
-      const cspTopUpCandidates: WordCandidate[] = [];
-      if (
-        csp11Enabled &&
-        !csp11Attempted &&
-        Date.now() < deadlineMs - 12_000
-      ) {
-        csp11Attempted = true;
-        const cspStartedAt = Date.now();
-        console.warn("[generate-crossword] csp11 config", {
-          enabled: true,
-          diagnosticOnly: csp11DiagnosticOnly,
-          theme,
-          language,
-          candidateCount: cspCandidateReservoir.candidates.length,
-          deadlineRemainingMs: deadlineMs - Date.now(),
-        });
-        cspDiagnosticLog("start", {
-          theme,
-          language,
-          attempt,
-          elapsedMs: Date.now() - t0,
-          reservoirCount: cspCandidateReservoir.candidates.length,
-          diagnosticOnly: csp11DiagnosticOnly,
-          totalBudgetMs: csp11DiagnosticOnly ? csp11DiagnosticBudgetMs : Math.min(24_000, deadlineMs - Date.now()),
-        });
-        cspBankAuditSetDistribution(
-          cspBankAuditReport,
-          "candidates-sent-to-csp-adapter",
-          cspCandidateReservoir.candidates.map((candidate) => candidate.answer)
-        );
-        const cspAttemptDeadlineMs = csp11DiagnosticOnly
-          ? Math.min(deadlineMs - 1_000, Date.now() + csp11DiagnosticBudgetMs)
-          : Math.min(deadlineMs - 12_000, Date.now() + 24_000);
-        const cspResult = await buildCspCrossword11ForEndpoint({
-          theme,
-          language,
-          candidates: cspCandidateReservoir.candidates.map((candidate) => ({
-            answer: candidate.answer,
-            thematic: candidate.thematic,
-            source: candidate.source,
-          })),
-          seed,
-          deadlineMs: cspAttemptDeadlineMs,
-          hybrid: hybridCspCandidateReservoir
-            ? {
-                enabled: true,
-                candidates: hybridCspCandidateReservoir.candidates,
-                minThematicEntries: 8,
-                targetThematicEntries: 10,
-                thematicCountsByLength: hybridCspCandidateReservoir.thematicCountsByLength,
-                supportCountsByLength: hybridCspCandidateReservoir.supportCountsByLength,
-              }
-            : undefined,
-          diagnosticLog: (event) => {
-            cspDiagnosticLog(event.stage, {
+      const cspResult = await runCspOrchestration({
+        size: n,
+        theme,
+        language,
+        attempt,
+        seed,
+        startedAtMs: t0,
+        deadlineMs,
+        enabled: csp11Enabled,
+        alreadyAttempted: csp11Attempted,
+        diagnosticOnly: csp11DiagnosticOnly,
+        diagnosticBudgetMs: csp11DiagnosticBudgetMs,
+        hybridDiagnostic: csp11HybridDiagnostic,
+        answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
+        client,
+        prepared: cspOrchestrationPrepared,
+        cspBankAuditReport,
+        thematicKeepSet,
+        publishThemeSet,
+        placementThemeSet,
+        dependencies: {
+          validateThematicAnswers: ({ theme, language, size, answers, attempt }) =>
+            validateThematicAnswers({
+              client: client!,
               theme,
               language,
+              size,
+              answers,
               attempt,
-              ...event.data,
-            });
-            if (event.stage.startsWith("hybrid-")) {
-              cspHybridDiagnosticLog(event.stage.replace(/^hybrid-/, ""), {
-                theme,
-                language,
-                attempt,
-                ...event.data,
-              });
-            }
-            if (event.stage === "search-profile") {
-              cspSearchProfileLog({
-                theme,
-                language,
-                attempt,
-                ...event.data,
-              });
-              const profile = event.data.profile as
-                | {
-                    searchCausality?: {
-                      summary?: unknown;
-                      depthProfile?: unknown;
-                      slotRankings?: unknown;
-                      earlyDecisionRankings?: unknown;
-                      candidateRankings?: unknown;
-                      wipeoutRankings?: unknown;
-                      branchingDiagnostics?: unknown;
-                      valueOrderingDiagnostics?: unknown;
-                      instrumentation?: unknown;
-                    };
-                  }
-                | undefined;
-              const searchCausality = profile?.searchCausality;
-              if (searchCausality) {
-                cspSearchCausalityLog({
-                  theme,
-                  language,
-                  attempt,
-                  phase: event.data.phase,
-                  summary: searchCausality.summary,
-                  depthProfile: searchCausality.depthProfile,
-                  slotRankings: searchCausality.slotRankings,
-                  earlyDecisionRankings: searchCausality.earlyDecisionRankings,
-                  candidateRankings: searchCausality.candidateRankings,
-                  instrumentation: searchCausality.instrumentation,
-                });
-                cspWipeoutCausalityLog({
-                  theme,
-                  language,
-                  attempt,
-                  phase: event.data.phase,
-                  wipeoutRankings: searchCausality.wipeoutRankings,
-                });
-                cspBranchingDiagnosticLog({
-                  theme,
-                  language,
-                  attempt,
-                  phase: event.data.phase,
-                  branchingDiagnostics: searchCausality.branchingDiagnostics,
-                });
-                cspValueOrderingDiagnosticLog({
-                  theme,
-                  language,
-                  attempt,
-                  phase: event.data.phase,
-                  valueOrderingDiagnostics: searchCausality.valueOrderingDiagnostics,
-                });
-              }
-            }
-          },
-          audit: (event) => {
-            cspBankAuditLog(`csp-${event.stage}`, event.data);
-            if (event.stage === "adapted-candidates") {
-              const stats = event.data.stats as
-                | {
-                    totalByLength?: Record<string | number, number>;
-                    rejectedByReason?: Record<string, number>;
-                  }
-                | undefined;
-              if (stats?.totalByLength) {
-                cspBankAuditReport.distributions["csp-adapter-output"] = Object.fromEntries(
-                  Object.entries(stats.totalByLength).map(([key, value]) => [String(key), value])
-                );
-              }
-              if (stats?.rejectedByReason) {
-                cspBankAuditReport.cspAdapterRejectedByReason = {
-                  ...cspBankAuditReport.cspAdapterRejectedByReason,
-                  ...stats.rejectedByReason,
-                };
-              }
-              cspBankAuditReport.cspCandidateCount =
-                typeof event.data.cspCandidateCount === "number"
-                  ? event.data.cspCandidateCount
-                  : cspBankAuditReport.cspCandidateCount;
-            }
-            if (event.stage === "solve-diagnostics") {
-              const requested = event.data.requestedTopUpByLength as Record<string | number, number> | undefined;
-              if (requested) {
-                cspBankAuditReport.cspRequestedTopUpByLength = Object.fromEntries(
-                  Object.entries(requested).map(([key, value]) => [String(key), value])
-                );
-              }
-              const attempts = Array.isArray(event.data.attempts) ? event.data.attempts : [];
-              cspBankAuditReport.cspDomainDiagnostics = attempts;
-              const firstMissing = attempts.find(
-                (item): item is { missingByLength: Record<string | number, number> } =>
-                  typeof item === "object" &&
-                  item !== null &&
-                  Object.keys((item as { missingByLength?: Record<string | number, number> }).missingByLength ?? {}).length > 0
-              );
-              if (firstMissing) {
-                cspBankAuditReport.cspMissingLengths = Object.fromEntries(
-                  Object.entries(firstMissing.missingByLength).map(([key, value]) => [String(key), value])
-                );
-              } else {
-                cspBankAuditReport.cspMissingLengths = {};
-              }
-            }
-            if (event.stage === "topup-returned") {
-              const returnedByLength = event.data.returnedByLength as Record<string | number, number> | undefined;
-              if (returnedByLength) {
-                const afterCspTopUp = cspBankAuditReport.distributions["after-csp-topup"] ?? {};
-                cspBankAuditMergeCounts(afterCspTopUp, returnedByLength);
-                cspBankAuditReport.distributions["after-csp-topup"] = afterCspTopUp;
-              }
-            }
-          },
-          topUpByLength:
-            client && Date.now() < deadlineMs - 28_000
-              ? async ({ requestedByLength, existingAnswers, attempt: cspTopUpAttempt }) => {
-                  let rawCspTopUpText = "";
-                  const topUp = await requestCspLengthTopUpAnswers11({
-                    theme,
-                    language,
-                    existingAnswers,
-                    requestedByLength,
-                    attempt: cspTopUpAttempt,
-                    completeJson: async (prompt) => {
-                      const completion = await client.chat.completions.create({
-                        model: ANSWERBANK_SEARCH_MODEL,
-                        temperature: 0.1,
-                        max_tokens: 1400,
-                        response_format: { type: "json_object" },
-                        messages: [
-                          { role: "system", content: "Return ONLY valid JSON. No extra text." },
-                          { role: "user", content: prompt },
-                        ],
-                      });
-                      rawCspTopUpText = completion.choices?.[0]?.message?.content ?? "";
-                      return rawCspTopUpText;
-                    },
-                  });
-                  cspBankAuditMergeCounts(
-                    cspBankAuditReport.cspTopUpRawByLength,
-                    cspBankAuditDistribution(topUp.candidates.map((candidate) => candidate.answer))
-                  );
-                  cspBankAuditMergeCounts(cspBankAuditReport.cspTopUpRejectedByLength, {});
-                  cspBankAuditLog("csp-topup-raw", {
-                    attempt: cspTopUpAttempt,
-                    requestedByLength,
-                    rawTextLength: rawCspTopUpText.length,
-                    parsedCount: topUp.candidates.length,
-                    parsedByLength: cspBankAuditDistribution(topUp.candidates.map((candidate) => candidate.answer)),
-                    rejectedByReason: topUp.rejectedByReason,
-                    sample: topUp.candidates.slice(0, 20).map((candidate) => candidate.answer),
-                  });
-                  const validated = await validateThematicAnswers({
-                    client,
-                    theme,
-                    language,
-                    size: n,
-                    answers: topUp.candidates.map((candidate) => candidate.answer),
-                    attempt: cspTopUpAttempt,
-                  });
-                  const validatedSet = new Set(validated);
-                  const acceptedTopUps = topUp.candidates
-                    .filter((candidate) => validatedSet.has(candidate.answer))
-                    .map((candidate): WordCandidate => ({
-                      answer: candidate.answer,
-                      thematic: true,
-                      source: "model",
-                    }));
-                  cspBankAuditMergeCounts(
-                    cspBankAuditReport.cspTopUpAcceptedByLength,
-                    cspBankAuditCandidateDistribution(acceptedTopUps)
-                  );
-                  cspBankAuditRejectedBySet(
-                    cspBankAuditReport,
-                    "csp-topup-validation",
-                    topUp.candidates.map((candidate) => candidate.answer),
-                    acceptedTopUps.map((candidate) => candidate.answer),
-                    "failed-thematic-validation"
-                  );
-                  cspBankAuditMergeCounts(
-                    cspBankAuditReport.cspTopUpRejectedByLength,
-                    cspBankAuditDistribution(
-                      topUp.candidates
-                        .filter((candidate) => !validatedSet.has(candidate.answer))
-                        .map((candidate) => candidate.answer)
-                    )
-                  );
-                  cspBankAuditLog("csp-topup-accepted", {
-                    attempt: cspTopUpAttempt,
-                    acceptedCount: acceptedTopUps.length,
-                    acceptedByLength: cspBankAuditCandidateDistribution(acceptedTopUps),
-                    rejectedByReason: cspBankAuditReport.rejectedByStage["csp-topup-validation"] ?? {},
-                    sample: acceptedTopUps.slice(0, 20).map((candidate) => candidate.answer),
-                  });
-                  for (const candidate of acceptedTopUps) {
-                    cspTopUpCandidates.push(candidate);
-                    thematicKeepSet.add(candidate.answer);
-                    publishThemeSet.add(candidate.answer);
-                    placementThemeSet.add(candidate.answer);
-                  }
-                  return acceptedTopUps;
-                }
-              : undefined,
-          topUpByConstraints:
-            client && Date.now() < deadlineMs - 28_000
-              ? async ({ requests, existingAnswers, attempt: cspTopUpAttempt }) => {
-                  let rawCspTopUpText = "";
-                  const topUp = await requestCspConstraintTopUpAnswers11({
-                    theme,
-                    language,
-                    excludedAnswers: existingAnswers,
-                    requests,
-                    attempt: cspTopUpAttempt,
-                    completeJson: async (prompt) => {
-                      const completion = await client.chat.completions.create({
-                        model: ANSWERBANK_SEARCH_MODEL,
-                        temperature: 0.1,
-                        max_tokens: 1600,
-                        response_format: { type: "json_object" },
-                        messages: [
-                          { role: "system", content: "Return ONLY valid JSON. No extra text." },
-                          { role: "user", content: prompt },
-                        ],
-                      });
-                      rawCspTopUpText = completion.choices?.[0]?.message?.content ?? "";
-                      return rawCspTopUpText;
-                    },
-                  });
-                  cspBankAuditMergeCounts(
-                    cspBankAuditReport.cspTopUpRawByLength,
-                    cspBankAuditDistribution(topUp.candidates.map((candidate) => candidate.answer))
-                  );
-                  cspBankAuditLog("csp-constraint-topup-raw", {
-                    attempt: cspTopUpAttempt,
-                    requests,
-                    rawTextLength: rawCspTopUpText.length,
-                    parsedCount: topUp.candidates.length,
-                    parsedByLength: cspBankAuditDistribution(topUp.candidates.map((candidate) => candidate.answer)),
-                    rejectedByReason: topUp.rejectedByReason,
-                    acceptedByRequestId: topUp.acceptedByRequestId,
-                    sample: topUp.candidates.slice(0, 20).map((candidate) => candidate.answer),
-                  });
-                  const validated = await validateThematicAnswers({
-                    client,
-                    theme,
-                    language,
-                    size: n,
-                    answers: topUp.candidates.map((candidate) => candidate.answer),
-                    attempt: cspTopUpAttempt,
-                  });
-                  const validatedSet = new Set(validated);
-                  const acceptedTopUps = topUp.candidates
-                    .filter((candidate) => validatedSet.has(candidate.answer))
-                    .map((candidate): WordCandidate => ({
-                      answer: candidate.answer,
-                      thematic: true,
-                      source: "model",
-                    }));
-                  cspBankAuditMergeCounts(
-                    cspBankAuditReport.cspTopUpAcceptedByLength,
-                    cspBankAuditCandidateDistribution(acceptedTopUps)
-                  );
-                  cspBankAuditRejectedBySet(
-                    cspBankAuditReport,
-                    "csp-constraint-topup-validation",
-                    topUp.candidates.map((candidate) => candidate.answer),
-                    acceptedTopUps.map((candidate) => candidate.answer),
-                    "failed-thematic-validation"
-                  );
-                  cspBankAuditMergeCounts(
-                    cspBankAuditReport.cspTopUpRejectedByLength,
-                    cspBankAuditDistribution(
-                      topUp.candidates
-                        .filter((candidate) => !validatedSet.has(candidate.answer))
-                        .map((candidate) => candidate.answer)
-                    )
-                  );
-                  cspBankAuditLog("csp-constraint-topup-accepted", {
-                    attempt: cspTopUpAttempt,
-                    acceptedCount: acceptedTopUps.length,
-                    acceptedByLength: cspBankAuditCandidateDistribution(acceptedTopUps),
-                    rejectedByReason: cspBankAuditReport.rejectedByStage["csp-constraint-topup-validation"] ?? {},
-                    sample: acceptedTopUps.slice(0, 20).map((candidate) => candidate.answer),
-                  });
-                  for (const candidate of acceptedTopUps) {
-                    cspTopUpCandidates.push(candidate);
-                    thematicKeepSet.add(candidate.answer);
-                    publishThemeSet.add(candidate.answer);
-                    placementThemeSet.add(candidate.answer);
-                  }
-                  return acceptedTopUps;
-                }
-              : undefined,
-        });
-        lastCspAttemptMeta = cspResult.ok
-          ? cspResult.meta
-          : {
-              attempted: true,
-              reason: cspResult.reason,
-              elapsedMs: Date.now() - cspStartedAt,
-              ...cspResult.meta,
-            };
-        if (cspResult.ok) {
-          for (const answer of cspResult.usedAnswers) {
-            const sourceCandidate = [...cspCandidateReservoir.candidates, ...cspTopUpCandidates].find(
-              (candidate) => candidate.answer === answer
-            );
-            if (sourceCandidate?.thematic) {
-              thematicKeepSet.add(answer);
-              publishThemeSet.add(answer);
-              placementThemeSet.add(answer);
-            }
-          }
-          cspBuilt = {
-            grid: cspResult.grid,
-            usedAnswers: cspResult.usedAnswers,
-            meta: {
-              ...cspResult.meta,
-              cspAttempt: lastCspAttemptMeta,
-            },
-          };
-          console.warn("[generate-crossword] csp11 accepted", {
-            patternId: cspResult.patternId,
-            entries: cspResult.usedAnswers.length,
-            nodesVisited: cspResult.meta.nodesVisited,
-            backtracks: cspResult.meta.backtracks,
-            cspElapsedMs: cspResult.meta.cspElapsedMs,
-          });
-        } else {
-          console.warn("[generate-crossword] csp11 failed; falling back to legacy", {
-            reason: cspResult.reason,
-            elapsedMs: Date.now() - cspStartedAt,
-            meta: cspResult.meta,
-          });
-          cspDiagnosticLog("failed", {
-            theme,
-            language,
-            attempt,
-            elapsedMs: Date.now() - cspStartedAt,
-            failureReason: cspResult.reason,
-            diagnosticOnly: csp11DiagnosticOnly,
-          });
-          if (csp11DiagnosticOnly) {
-            const diagnostic =
-              typeof cspResult.meta.diagnostic === "object" && cspResult.meta.diagnostic !== null
-                ? (cspResult.meta.diagnostic as Record<string, unknown>)
-                : {};
-            const afterCspTopUpDistribution = cspBankAuditDistribution(
-              [...cspCandidateReservoir.candidates, ...cspTopUpCandidates].map((candidate) => candidate.answer)
-            );
-            return NextResponse.json(
-              {
-                error: "csp-diagnostic-failed",
-                theme,
-                language,
-                size: n,
-                diagnostic: {
-                  failureReason: cspResult.reason,
-                  reservoirCountsByLength: cspCandidateReservoir.distributionByLength,
-                  postTopUpReservoirCountsByLength:
-                    diagnostic.postTopUpReservoirCountsByLength ?? afterCspTopUpDistribution,
-                  patternAttempts: cspResult.meta.patternDiagnostics ?? diagnostic.patternAttempts ?? [],
-                  elapsedMs: Date.now() - cspStartedAt,
-                  ...diagnostic,
-                  cspAttemptMeta: {
-                    attempted: true,
-                    reason: cspResult.reason,
-                    source: cspResult.meta.source,
-                    algorithm: cspResult.meta.algorithm,
-                    cspElapsedMs: cspResult.meta.cspElapsedMs,
-                    cspTopUpCalls: cspResult.meta.cspTopUpCalls,
-                    cspConstraintTopUpCalls: cspResult.meta.cspConstraintTopUpCalls,
-                  },
-                  bankAudit: {
-                    rawPoolDistribution: cspBankAuditReport.distributions.rawPoolDistribution,
-                    cspReservoirDistribution: cspBankAuditReport.distributions.cspReservoirDistribution,
-                    legacyPoolDistribution: cspBankAuditReport.distributions.legacyPoolDistribution,
-                    cspAdapterDistribution: cspBankAuditReport.distributions["csp-adapter-output"],
-                    afterCspTopUpDistribution,
-                  },
-                },
-              },
-              { status: 422 }
-            );
-          }
-        }
+            }),
+        },
+      });
+      if (cspResult.attempted) {
+        csp11Attempted = true;
       }
-      if (csp11Enabled) {
-        cspBankAuditReport.distributions.afterCspTopUp = cspBankAuditDistribution(
-          [...cspCandidateReservoir.candidates, ...cspTopUpCandidates].map((candidate) => candidate.answer)
-        );
-        cspBankAuditLog("final report", {
-          ...cspBankAuditReport,
-          rejectedByStage: cspBankAuditReport.rejectedByStage,
-          rejectedSamplesByStage: cspBankAuditReport.rejectedSamplesByStage,
-          samplesByStage: cspBankAuditReport.samplesByStage,
-        });
+      if (cspResult.status === "accepted") {
+        lastCspAttemptMeta = cspResult.metadata.attemptMeta;
+        cspBuilt = cspResult.crossword;
+      } else if (cspResult.status === "rejected") {
+        lastCspAttemptMeta = cspResult.metadata.attemptMeta;
+      } else if (cspResult.status === "diagnostic") {
+        lastCspAttemptMeta = cspResult.metadata.attemptMeta;
+        return NextResponse.json(cspResult.diagnostics.responsePayload, { status: 422 });
       }
       if (!cspBuilt && n === 11 && process.env.ENABLE_EARLY_OPENING_11 === "1") {
         const earlyOpeningThematicSet = new Set<string>();
