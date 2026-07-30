@@ -62,7 +62,6 @@ import {
   crossedEntryStats,
   crosswordDensityFromGrid,
   desiredPublishEntriesForSize,
-  enforceMinWordLen,
   entryCrossingStats,
   gridToStrings,
   hasShortLetterRuns,
@@ -80,8 +79,19 @@ import {
   pruneDanglingRuns,
   pruneWeakEntriesPreservingCrosses,
   sanitizeUncheckedGrid,
-  shortRunCellKeys,
 } from "@/app/lib/gridValidation";
+import {
+  rebuildExactFullyCheckedPublishableCrossword as rebuildExactFullyCheckedPublishableCrosswordWithPolicies,
+  rebuildExactPublishableCrossword as rebuildExactPublishableCrosswordWithPolicies,
+  rebuildFullyCheckedPublishableCrossword as rebuildFullyCheckedPublishableCrosswordWithPolicies,
+  rebuildGridFromAllowedEntries,
+  rebuildGridFromEntries,
+  rebuildGridFromEntriesAllowingAllowedDerived,
+  rebuildNoShortRunPublishableCrossword as rebuildNoShortRunPublishableCrosswordWithPolicies,
+  rebuildPlayableCrossword as rebuildPlayableCrosswordWithPolicies,
+  rebuildSanitizedFullyCheckedPublishableCrossword as rebuildSanitizedFullyCheckedPublishableCrosswordWithPolicies,
+  type GridReconstructionPolicies,
+} from "@/app/lib/gridReconstruction";
 import {
   runLegacyBuilder,
   type LegacyBuilderDependencies,
@@ -1923,119 +1933,6 @@ function expandGeographicCompoundAnswers(answers: string[], maxLen: number): str
   }
 
   return Array.from(new Set(out));
-}
-
-function rebuildGridFromAllowedEntries(
-  grid: string[][],
-  allowedAnswers: Set<string>,
-  minLen: number
-): { grid: string[][]; derived: Omit<Entry, "clue">[] } | null {
-  const derived = deriveEntriesFromGrid(grid, minLen).filter((e) => allowedAnswers.has(e.answer));
-  if (derived.length === 0) return null;
-
-  const size = grid.length;
-  const scratch = makeEmptyWorkingGrid(size);
-
-  for (const entry of derived) {
-    for (let i = 0; i < entry.answer.length; i++) {
-      const r = entry.direction === "down" ? entry.row + i : entry.row;
-      const c = entry.direction === "across" ? entry.col + i : entry.col;
-      const ch = entry.answer[i];
-      const cur = scratch[r][c];
-      if (cur !== "" && cur !== ch) return null;
-      scratch[r][c] = ch;
-    }
-  }
-
-  let blocked = paintBlocks(scratch);
-  blocked = enforceMinWordLen(blocked, minLen);
-  blocked = pruneDanglingRuns(blocked, minLen);
-  blocked = keepLargestConnectedComponent(blocked);
-  blocked = keepLargestConnectedComponent(blocked);
-
-  const final = gridToStrings(blocked as (string | null)[][]);
-  const finalDerived = deriveEntriesFromGrid(final, minLen);
-
-  if (finalDerived.length === 0) return null;
-  if (finalDerived.some((e) => !allowedAnswers.has(e.answer))) return null;
-
-  return { grid: final, derived: finalDerived };
-}
-
-function rebuildGridFromEntries(
-  size: number,
-  entries: Omit<Entry, "clue">[],
-  minLen: number
-): { grid: string[][]; derived: Omit<Entry, "clue">[] } | null {
-  if (entries.length === 0) return null;
-
-  const scratch = makeEmptyWorkingGrid(size);
-
-  for (const entry of entries) {
-    for (let i = 0; i < entry.answer.length; i++) {
-      const r = entry.direction === "down" ? entry.row + i : entry.row;
-      const c = entry.direction === "across" ? entry.col + i : entry.col;
-      if (!inBounds(size, r, c)) return null;
-      const cur = scratch[r][c];
-      const ch = entry.answer[i];
-      if (cur !== "" && cur !== ch) return null;
-      scratch[r][c] = ch;
-    }
-  }
-
-  let blocked = paintBlocks(scratch);
-  blocked = enforceMinWordLen(blocked, minLen);
-  blocked = pruneDanglingRuns(blocked, minLen);
-  blocked = keepLargestConnectedComponent(blocked);
-  blocked = keepLargestConnectedComponent(blocked);
-
-  const final = gridToStrings(blocked as (string | null)[][]);
-  const finalDerived = deriveEntriesFromGrid(final, minLen);
-  const expectedKeys = new Set(entries.map((e) => `${e.direction}:${e.row}:${e.col}:${e.answer}`));
-  const finalKeys = new Set(finalDerived.map((e) => `${e.direction}:${e.row}:${e.col}:${e.answer}`));
-
-  for (const key of finalKeys) {
-    if (!expectedKeys.has(key)) return null;
-  }
-
-  return { grid: final, derived: finalDerived };
-}
-
-function rebuildGridFromEntriesAllowingAllowedDerived(
-  size: number,
-  entries: Omit<Entry, "clue">[],
-  minLen: number,
-  allowedAnswers: Set<string>
-): { grid: string[][]; derived: Omit<Entry, "clue">[] } | null {
-  if (entries.length === 0) return null;
-
-  const scratch = makeEmptyWorkingGrid(size);
-
-  for (const entry of entries) {
-    for (let i = 0; i < entry.answer.length; i++) {
-      const r = entry.direction === "down" ? entry.row + i : entry.row;
-      const c = entry.direction === "across" ? entry.col + i : entry.col;
-      if (!inBounds(size, r, c)) return null;
-      const cur = scratch[r][c];
-      const ch = entry.answer[i];
-      if (cur !== "" && cur !== ch) return null;
-      scratch[r][c] = ch;
-    }
-  }
-
-  let blocked = paintBlocks(scratch);
-  blocked = enforceMinWordLen(blocked, minLen);
-  blocked = pruneDanglingRuns(blocked, minLen);
-  blocked = keepLargestConnectedComponent(blocked);
-  blocked = keepLargestConnectedComponent(blocked);
-
-  const final = gridToStrings(blocked as (string | null)[][]);
-  const finalDerived = deriveEntriesFromGrid(final, minLen);
-
-  if (finalDerived.length === 0) return null;
-  if (finalDerived.some((entry) => !allowedAnswers.has(entry.answer))) return null;
-
-  return { grid: final, derived: finalDerived };
 }
 
 function specificThematicFallbackClue(theme: string, answer: string, language: "es" | "en"): string | null {
@@ -6383,6 +6280,15 @@ async function buildThemeFirstRescueCrossword(opts: {
   };
 }
 
+const gridReconstructionPolicies: GridReconstructionPolicies = {
+  applyCluesAndOverrides,
+  isAlwaysAllowedAnswer: (answer) => ALWAYS_ALLOW_ANSWERS.has(answer),
+  isLikelyBadAnswer,
+  isOverGenericThemeWordForTheme,
+  isPlaceholderClue,
+  specificThematicFallbackClue,
+};
+
 function rebuildPlayableCrossword(
   theme: string,
   size: number,
@@ -6390,79 +6296,14 @@ function rebuildPlayableCrossword(
   language: "es" | "en",
   allowedAnswers: Set<string>
 ): { grid: string[][]; entries: Entry[] } | null {
-  const playableEntries = entries.filter((e) => {
-    if (!allowedAnswers.has(e.answer)) return false;
-    if (isOverGenericThemeWordForTheme(theme, e.answer)) return false;
-    if (isPlaceholderClue(e.clue, language)) return false;
-    return true;
-  });
-
-  if (playableEntries.length === 0) return null;
-
-  const minLen = minEntryLenForSize(size);
-  const tryExactRebuild = (selected: Entry[]): { grid: string[][]; entries: Entry[] } | null => {
-    const rebuilt = rebuildGridFromEntries(
-      size,
-      selected.map((entry) => ({
-        number: entry.number,
-        row: entry.row,
-        col: entry.col,
-        direction: entry.direction,
-        answer: entry.answer,
-      })),
-      minLen
-    );
-
-    if (!rebuilt?.derived || rebuilt.derived.length === 0) return null;
-
-    const rebuiltKeyMap = new Map(
-      selected.map((entry) => [
-        `${entry.direction}:${entry.row}:${entry.col}:${entry.answer}`,
-        entry,
-      ])
-    );
-
-    const finalEntries: Entry[] = [];
-    for (const derived of rebuilt.derived) {
-      const key = `${derived.direction}:${derived.row}:${derived.col}:${derived.answer}`;
-      const original = rebuiltKeyMap.get(key);
-      if (!original) return null;
-      finalEntries.push(original);
-    }
-
-    return { grid: rebuilt.grid, entries: finalEntries };
-  };
-
-  const scoreEntry = (entry: Entry) => {
-    let score = 0;
-    if (!isPlaceholderClue(entry.clue, language)) score += 100;
-    if (specificThematicFallbackClue(theme, entry.answer, language)) score += 40;
-    score += Math.min(entry.answer.length, 12);
-    return score;
-  };
-
-  const sortedPlayable = [...playableEntries].sort((a, b) => scoreEntry(b) - scoreEntry(a));
-  const direct = tryExactRebuild(sortedPlayable);
-  if (direct) return direct;
-
-  let working = [...sortedPlayable];
-  while (working.length >= 4) {
-    let improved = false;
-    for (let i = working.length - 1; i >= 0; i -= 1) {
-      const candidate = working.filter((_, idx) => idx !== i);
-      if (candidate.length < 4) continue;
-      const rebuilt = tryExactRebuild(candidate);
-      if (rebuilt) return rebuilt;
-    }
-
-    working = working.slice(0, -1);
-    const rebuilt = working.length >= 4 ? tryExactRebuild(working) : null;
-    if (rebuilt) return rebuilt;
-    improved = true;
-    if (!improved) break;
-  }
-
-  return null;
+  return rebuildPlayableCrosswordWithPolicies(
+    theme,
+    size,
+    entries,
+    language,
+    allowedAnswers,
+    gridReconstructionPolicies
+  );
 }
 
 function rebuildExactPublishableCrossword(
@@ -6473,75 +6314,15 @@ function rebuildExactPublishableCrossword(
   allowedAnswers: Set<string>,
   minEntries = 3
 ): { grid: string[][]; entries: Entry[] } | null {
-  const selected = entries.filter((e) => {
-    if (!allowedAnswers.has(e.answer)) return false;
-    if (isOverGenericThemeWordForTheme(theme, e.answer)) return false;
-    if (isPlaceholderClue(e.clue, language)) return false;
-    return true;
-  });
-
-  if (selected.length < minEntries) return null;
-
-  const scoreEntry = (entry: Entry) => {
-    let score = 0;
-    if (!isPlaceholderClue(entry.clue, language)) score += 100;
-    if (specificThematicFallbackClue(theme, entry.answer, language)) score += 40;
-    score += Math.min(entry.answer.length, 12);
-    return score;
-  };
-
-  const sorted = [...selected].sort((a, b) => scoreEntry(b) - scoreEntry(a));
-  const tryExact = (candidate: Entry[]): { grid: string[][]; entries: Entry[] } | null => {
-    const rebuilt = rebuildGridFromEntries(
-      size,
-      candidate.map((entry) => ({
-        number: entry.number,
-        row: entry.row,
-        col: entry.col,
-        direction: entry.direction,
-        answer: entry.answer,
-      })),
-      minEntryLenForSize(size)
-    );
-    if (!rebuilt?.derived || rebuilt.derived.length < minEntries) return null;
-
-    const originalMap = new Map(
-      candidate.map((entry) => [
-        `${entry.direction}:${entry.row}:${entry.col}:${entry.answer}`,
-        entry,
-      ])
-    );
-
-    const finalEntries: Entry[] = [];
-    for (const derived of rebuilt.derived) {
-      const key = `${derived.direction}:${derived.row}:${derived.col}:${derived.answer}`;
-      const original = originalMap.get(key);
-      if (!original) return null;
-      finalEntries.push(original);
-    }
-
-    return { grid: rebuilt.grid, entries: finalEntries };
-  };
-
-  const direct = tryExact(sorted);
-  if (direct) return direct;
-
-  let working = [...sorted];
-  while (working.length >= minEntries) {
-    for (let i = working.length - 1; i >= 0; i -= 1) {
-      const candidate = working.filter((_, idx) => idx !== i);
-      if (candidate.length < minEntries) continue;
-      const rebuilt = tryExact(candidate);
-      if (rebuilt) return rebuilt;
-    }
-    working = working.slice(0, -1);
-    if (working.length >= minEntries) {
-      const rebuilt = tryExact(working);
-      if (rebuilt) return rebuilt;
-    }
-  }
-
-  return null;
+  return rebuildExactPublishableCrosswordWithPolicies(
+    theme,
+    size,
+    entries,
+    language,
+    allowedAnswers,
+    gridReconstructionPolicies,
+    minEntries
+  );
 }
 
 function rebuildExactFullyCheckedPublishableCrossword(
@@ -6552,80 +6333,15 @@ function rebuildExactFullyCheckedPublishableCrossword(
   allowedAnswers: Set<string>,
   minEntries = 3
 ): { grid: string[][]; entries: Entry[] } | null {
-  const selected = entries.filter((e) => {
-    if (!allowedAnswers.has(e.answer)) return false;
-    if (isOverGenericThemeWordForTheme(theme, e.answer)) return false;
-    if (isPlaceholderClue(e.clue, language)) return false;
-    return true;
-  });
-
-  if (selected.length < minEntries) return null;
-
-  const scoreEntry = (entry: Entry) => {
-    let score = 0;
-    if (!isPlaceholderClue(entry.clue, language)) score += 100;
-    if (specificThematicFallbackClue(theme, entry.answer, language)) score += 40;
-    score += Math.min(entry.answer.length, 12);
-    return score;
-  };
-
-  const minLen = minEntryLenForSize(size);
-  const sorted = [...selected].sort((a, b) => scoreEntry(b) - scoreEntry(a));
-
-  const tryExactChecked = (candidate: Entry[]): { grid: string[][]; entries: Entry[] } | null => {
-    const rebuilt = rebuildGridFromEntries(
-      size,
-      candidate.map((entry) => ({
-        number: entry.number,
-        row: entry.row,
-        col: entry.col,
-        direction: entry.direction,
-        answer: entry.answer,
-      })),
-      minLen
-    );
-    if (!rebuilt?.derived || rebuilt.derived.length < minEntries) return null;
-
-    const checked = checkedCellStats(rebuilt.grid, minLen);
-    if (checked.total === 0 || checked.checked !== checked.total) return null;
-
-    const originalMap = new Map(
-      candidate.map((entry) => [
-        `${entry.direction}:${entry.row}:${entry.col}:${entry.answer}`,
-        entry,
-      ])
-    );
-
-    const finalEntries: Entry[] = [];
-    for (const derived of rebuilt.derived) {
-      const key = `${derived.direction}:${derived.row}:${derived.col}:${derived.answer}`;
-      const original = originalMap.get(key);
-      if (!original) return null;
-      finalEntries.push(original);
-    }
-
-    return { grid: rebuilt.grid, entries: finalEntries };
-  };
-
-  const direct = tryExactChecked(sorted);
-  if (direct) return direct;
-
-  let working = [...sorted];
-  while (working.length >= minEntries) {
-    for (let i = working.length - 1; i >= 0; i -= 1) {
-      const candidate = working.filter((_, idx) => idx !== i);
-      if (candidate.length < minEntries) continue;
-      const rebuilt = tryExactChecked(candidate);
-      if (rebuilt) return rebuilt;
-    }
-    working = working.slice(0, -1);
-    if (working.length >= minEntries) {
-      const rebuilt = tryExactChecked(working);
-      if (rebuilt) return rebuilt;
-    }
-  }
-
-  return null;
+  return rebuildExactFullyCheckedPublishableCrosswordWithPolicies(
+    theme,
+    size,
+    entries,
+    language,
+    allowedAnswers,
+    gridReconstructionPolicies,
+    minEntries
+  );
 }
 
 function rebuildFullyCheckedPublishableCrossword(
@@ -6637,17 +6353,16 @@ function rebuildFullyCheckedPublishableCrossword(
   clueByAnswer: Map<string, string>,
   minEntries = 4
 ): { grid: string[][]; entries: Entry[] } | null {
-  const minLen = minEntryLenForSize(size);
-  const rebuilt = rebuildGridFromAllowedEntries(grid, allowedAnswers, minLen);
-  if (!rebuilt?.derived || rebuilt.derived.length < minEntries) return null;
-
-  const checked = checkedCellStats(rebuilt.grid, minLen);
-  if (checked.total === 0 || checked.checked !== checked.total) return null;
-
-  const entries = applyCluesAndOverrides(theme, language, rebuilt.derived, clueByAnswer);
-  if (entries.some((e) => isPlaceholderClue(e.clue, language))) return null;
-
-  return { grid: rebuilt.grid, entries };
+  return rebuildFullyCheckedPublishableCrosswordWithPolicies(
+    theme,
+    size,
+    grid,
+    language,
+    allowedAnswers,
+    clueByAnswer,
+    gridReconstructionPolicies,
+    minEntries
+  );
 }
 
 function rebuildSanitizedFullyCheckedPublishableCrossword(
@@ -6659,18 +6374,14 @@ function rebuildSanitizedFullyCheckedPublishableCrossword(
   clueByAnswer: Map<string, string>,
   minEntries: number
 ): { grid: string[][]; entries: Entry[] } | null {
-  const minLen = minEntryLenForSize(size);
-  const sanitized = sanitizeUncheckedGrid(grid, minLen);
-  const sanitizedDerived = deriveEntriesFromGrid(sanitized, minLen);
-  if (sanitizedDerived.length < minEntries) return null;
-
-  return rebuildFullyCheckedPublishableCrossword(
+  return rebuildSanitizedFullyCheckedPublishableCrosswordWithPolicies(
     theme,
     size,
-    sanitized,
+    grid,
     language,
     allowedAnswers,
     clueByAnswer,
+    gridReconstructionPolicies,
     minEntries
   );
 }
@@ -6684,126 +6395,16 @@ function rebuildNoShortRunPublishableCrossword(
   minEntries: number,
   minThematicEntries: number
 ): { grid: string[][]; entries: Entry[] } | null {
-  const minLen = minEntryLenForSize(size);
-  const usable = entries.filter((entry) => {
-    if (isPlaceholderClue(entry.clue, language)) return false;
-    if (isLikelyBadAnswer(entry.answer) && !ALWAYS_ALLOW_ANSWERS.has(entry.answer)) return false;
-    return true;
-  });
-
-  if (usable.length < minEntries) return null;
-
-  const scoreEntry = (entry: Entry) => {
-    let score = 0;
-    if (thematicSet.has(entry.answer)) score += 1000;
-    if (specificThematicFallbackClue(theme, entry.answer, language)) score += 250;
-    if (!isOverGenericThemeWordForTheme(theme, entry.answer)) score += 120;
-    score += Math.min(entry.answer.length, 12);
-    return score;
-  };
-
-  const sorted = [...usable].sort((a, b) => scoreEntry(b) - scoreEntry(a));
-  const seen = new Set<string>();
-  const maxStates = 12000;
-  let states = 0;
-
-  const tryCandidate = (candidate: Entry[]): { grid: string[][]; entries: Entry[] } | null => {
-    const rebuilt = rebuildGridFromEntries(
-      size,
-      candidate.map((entry) => ({
-        number: entry.number,
-        row: entry.row,
-        col: entry.col,
-        direction: entry.direction,
-        answer: entry.answer,
-      })),
-      minLen
-    );
-    if (!rebuilt) return null;
-    if (rebuilt.derived.length < minEntries) return null;
-    if (hasShortLetterRuns(rebuilt.grid, minLen)) return null;
-
-    const originalByKey = new Map(
-      candidate.map((entry) => [
-        `${entry.direction}:${entry.row}:${entry.col}:${entry.answer}`,
-        entry,
-      ])
-    );
-
-    const rebuiltEntries: Entry[] = [];
-    for (const derived of rebuilt.derived) {
-      const key = `${derived.direction}:${derived.row}:${derived.col}:${derived.answer}`;
-      const original = originalByKey.get(key);
-      if (!original) return null;
-      rebuiltEntries.push(original);
-    }
-
-    const checked = checkedCellStats(rebuilt.grid, minLen);
-    const crossed = crossedEntryStats(rebuilt.grid, rebuiltEntries, minLen);
-    const thematicCount = rebuiltEntries.filter((entry) => thematicSet.has(entry.answer)).length;
-    if (crossed.crossed < minEntries) return null;
-    if (checked.ratio < 0.25) return null;
-    if (thematicCount < minThematicEntries) return null;
-
-    return { grid: rebuilt.grid, entries: rebuiltEntries };
-  };
-
-  const search = (candidate: Entry[], startDropIndex: number): { grid: string[][]; entries: Entry[] } | null => {
-    states++;
-    if (states > maxStates) return null;
-    if (candidate.length < minEntries) return null;
-
-    const key = candidate
-      .map((entry) => `${entry.direction}:${entry.row}:${entry.col}:${entry.answer}`)
-      .join("|");
-    if (seen.has(key)) return null;
-    seen.add(key);
-
-    const direct = tryCandidate(candidate);
-    if (direct) return direct;
-
-    const rebuiltForDrops = rebuildGridFromEntries(
-      size,
-      candidate.map((entry) => ({
-        number: entry.number,
-        row: entry.row,
-        col: entry.col,
-        direction: entry.direction,
-        answer: entry.answer,
-      })),
-      minLen
-    );
-    const shortCells = rebuiltForDrops ? shortRunCellKeys(rebuiltForDrops.grid, minLen) : new Set<string>();
-    const entryTouchesShortRun = (entry: Entry) => {
-      for (let i = 0; i < entry.answer.length; i++) {
-        const r = entry.direction === "down" ? entry.row + i : entry.row;
-        const c = entry.direction === "across" ? entry.col + i : entry.col;
-        if (shortCells.has(`${r},${c}`)) return true;
-      }
-      return false;
-    };
-    const dropOrder = candidate
-      .map((entry, idx) => ({ entry, idx }))
-      .sort((a, b) => {
-        const aTouches = entryTouchesShortRun(a.entry) ? 1 : 0;
-        const bTouches = entryTouchesShortRun(b.entry) ? 1 : 0;
-        if (aTouches !== bTouches) return bTouches - aTouches;
-        return scoreEntry(a.entry) - scoreEntry(b.entry);
-      })
-      .map((item) => item.idx);
-
-    const minDropIndex = Math.max(0, startDropIndex);
-    for (const i of dropOrder) {
-      if (i < minDropIndex) continue;
-      const next = candidate.filter((_, idx) => idx !== i);
-      const result = search(next, 0);
-      if (result) return result;
-    }
-
-    return null;
-  };
-
-  return search(sorted, 0);
+  return rebuildNoShortRunPublishableCrosswordWithPolicies(
+    theme,
+    size,
+    entries,
+    language,
+    thematicSet,
+    minEntries,
+    minThematicEntries,
+    gridReconstructionPolicies
+  );
 }
 
 function augmentNoShortGridWithCandidates(
