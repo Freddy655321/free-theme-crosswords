@@ -56,6 +56,11 @@ import {
 } from "@/app/lib/openaiRepairServices";
 import { runThemeFirstRescue, type ThemeFirstRescueDependencies } from "@/app/lib/themeFirstRescue";
 import {
+  createBestPartialCandidate,
+  selectBetterBestPartial,
+  type BestPartial,
+} from "@/app/lib/bestPartial";
+import {
   applyCluesAndOverridesWithPolicies,
   deriveEntriesFromGrid as deriveEntriesFromGridFromPublish,
   publishQualityIssueWithPolicies,
@@ -4930,17 +4935,7 @@ export async function POST(req: NextRequest) {
 
   const MAX_ATTEMPTS = n === 11 ? 2 : 1;
   const allowModelRescueFor11 = n === 11 && process.env.OPENAI_11X11_MODEL_RESCUE !== "0";
-  let bestPartial:
-    | {
-        built: { grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> };
-        derived: DerivedEntry[];
-        pool: WordCandidate[];
-        notesByAnswer: Map<string, string>;
-        trustedThematicSet: Set<string>;
-        attempt: number;
-        fallbackScore: number;
-      }
-    | null = null;
+  let bestPartial: BestPartial | null = null;
   let lastAttemptPool: WordCandidate[] = [];
   let lastModelError: string | null = null;
   let lastAnswerbankIssue: string | null = null;
@@ -6171,23 +6166,19 @@ console.warn("[generate-crossword] ok: pool", {
         entryCrossingStatsForBuilt.weakEntries.length *
           (derived.length >= minPublishEntriesForSize(n) ? 140000 : 18000);
 
-      if (
-        derived.length > 0 &&
-        (!bestPartial ||
-          (bestPartial.derived.length < minPublishEntriesForSize(n) && derived.length >= minPublishEntriesForSize(n)) ||
-          ((bestPartial.derived.length >= minPublishEntriesForSize(n)) === (derived.length >= minPublishEntriesForSize(n)) &&
-            fallbackScore > bestPartial.fallbackScore))
-      ) {
-        bestPartial = {
+      bestPartial = selectBetterBestPartial(
+        bestPartial,
+        createBestPartialCandidate({
           built,
           derived,
           pool,
           notesByAnswer,
-          trustedThematicSet: new Set(thematicKeepSet),
+          thematicKeepSet,
           attempt,
           fallbackScore,
-        };
-      }
+        }),
+        minPublishEntriesForSize(n)
+      );
 
       let acceptable = isAcceptable(built.grid, derived, publishThemeSet);
 
