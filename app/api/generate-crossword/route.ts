@@ -16,6 +16,7 @@ import type {
 } from "@/app/lib/crosswordTypes";
 import {
   ASCII_A_TO_Z,
+  errorSummary,
   inBounds,
   makeSeededRng,
   normalizeAnswer,
@@ -58,6 +59,7 @@ import { runThemeFirstRescue, type ThemeFirstRescueDependencies } from "@/app/li
 import {
   createBestPartialCandidate,
   selectBetterBestPartial,
+  shouldRejectBestPartialForStrict11,
   type BestPartial,
 } from "@/app/lib/bestPartial";
 import {
@@ -114,6 +116,7 @@ import {
 } from "@/app/lib/gridEnhancement";
 import { runOpeningBuilder, type OpeningBuilderDependencies } from "@/app/lib/openingBuilder";
 import {
+  pickPoolForSize,
   runLegacyBuilder,
   type LegacyBuilderDependencies,
   type LegacyBuilderInputBase,
@@ -168,22 +171,6 @@ function configureOpenAITlsForLocalDev() {
 }
 
 configureOpenAITlsForLocalDev();
-
-function errorSummary(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
-
-  const cause = "cause" in error ? (error as { cause?: unknown }).cause : undefined;
-  const causeCode =
-    cause && typeof cause === "object" && "code" in cause
-      ? String((cause as { code?: unknown }).code)
-      : "";
-
-  return causeCode ? `${error.name}: ${error.message} (${causeCode})` : `${error.name}: ${error.message}`;
-}
-
-function shouldRejectBestPartialForStrict11(size: number): boolean {
-  return size === 11;
-}
 
 function isGenericThematicClue(clue: string): boolean {
   const lower = clue.toLowerCase().trim();
@@ -5218,50 +5205,11 @@ export async function POST(req: NextRequest) {
       return b.answer.length - a.answer.length;
     });
 
-    const pickPoolForSize = (items: typeof rawPool) => {
-      if (n !== 11) return items;
-
-      const thematic = items.filter((x) => placementCoreThemeSet.has(x.answer));
-
-      const takeByLen = (
-        source: typeof rawPool,
-        minLen: number,
-        maxLen: number,
-        limit: number,
-        used: Set<string>
-      ) => {
-        const picked: typeof rawPool = [];
-        for (const item of source) {
-          const len = item.answer.length;
-          if (len < minLen || len > maxLen) continue;
-          if (used.has(item.answer)) continue;
-          picked.push(item);
-          used.add(item.answer);
-          if (picked.length >= limit) break;
-        }
-        return picked;
-      };
-
-      const used = new Set<string>();
-      const next: typeof rawPool = [];
-
-      const thematicSorted = [...thematic].sort((a, b) => b.answer.length - a.answer.length);
-      next.push(...takeByLen(thematicSorted, 8, 11, 8, used));
-      next.push(...takeByLen(thematicSorted, 6, 7, 12, used));
-      next.push(...takeByLen(thematicSorted, 4, 5, 10, used));
-      next.push(...takeByLen(thematicSorted, minEntryLenForSize(n), 3, 8, used));
-
-      for (const item of thematicSorted) {
-        if (used.has(item.answer)) continue;
-        next.push(item);
-        used.add(item.answer);
-        if (next.length >= 96) break;
-      }
-
-      return next;
-    };
-
-    const basePool = pickPoolForSize(byPriority);
+    const basePool = pickPoolForSize(byPriority, {
+      size: n,
+      placementCoreThemeSet,
+      minEntryLenForSize,
+    });
     cspBankAuditSetDistribution(
       cspBankAuditReport,
       "pool-after-pickPoolForSize",

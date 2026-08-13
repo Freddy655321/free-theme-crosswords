@@ -1,4 +1,5 @@
 export { runLegacyBuilder } from "./runLegacyBuilder";
+export { pickPoolForSize } from "./pickPoolForSize";
 export type {
   LegacyBuilderDependencies,
   LegacyBuilderInput,

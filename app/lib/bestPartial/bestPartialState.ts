@@ -35,3 +35,7 @@ export function selectBetterBestPartial(
 ): BestPartial | null {
   return shouldReplaceBestPartial(current, candidate, minPublishEntries) ? candidate : current;
 }
+
+export function shouldRejectBestPartialForStrict11(size: number): boolean {
+  return size === 11;
+}

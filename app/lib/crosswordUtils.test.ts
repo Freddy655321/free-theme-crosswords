@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  errorSummary,
   inBounds,
   makeSeededRng,
   normalizeAnswer,
@@ -18,6 +19,15 @@ test("normalizeAnswer preserves current ASCII/digit normalization behavior", () 
   assert.equal(normalizeAnswer("canción"), "CANCION");
   assert.equal(normalizeAnswer("mIx-42"), "MIX42");
   assert.equal(normalizeAnswer("a_b.c"), "A_B.C");
+});
+
+test("errorSummary preserves current Error and cause-code formatting", () => {
+  assert.equal(errorSummary("plain"), "plain");
+  assert.equal(errorSummary(new Error("boom")), "Error: boom");
+
+  const error = new Error("failed") as Error & { cause?: { code: string } };
+  error.cause = { code: "ECONNRESET" };
+  assert.equal(errorSummary(error), "Error: failed (ECONNRESET)");
 });
 
 test("safeJson parses valid JSON and salvages object text without throwing", () => {

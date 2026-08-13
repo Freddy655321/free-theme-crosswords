@@ -12,6 +12,18 @@ export function normalizeAnswer(s: string | undefined | null): string {
     .replace(/\s|-/g, "");
 }
 
+export function errorSummary(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+
+  const cause = "cause" in error ? (error as { cause?: unknown }).cause : undefined;
+  const causeCode =
+    cause && typeof cause === "object" && "code" in cause
+      ? String((cause as { code?: unknown }).code)
+      : "";
+
+  return causeCode ? `${error.name}: ${error.message} (${causeCode})` : `${error.name}: ${error.message}`;
+}
+
 export function safeJson<T = unknown>(text: string): T | null {
   if (!text) return null;
   try {

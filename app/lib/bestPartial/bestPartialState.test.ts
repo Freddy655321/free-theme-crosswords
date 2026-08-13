@@ -5,6 +5,7 @@ import {
   createBestPartialCandidate,
   selectBetterBestPartial,
   shouldReplaceBestPartial,
+  shouldRejectBestPartialForStrict11,
 } from "./bestPartialState";
 import type { BestPartial, BestPartialBuilt } from "./bestPartialTypes";
 
@@ -176,5 +177,11 @@ describe("bestPartialState", () => {
     assert.equal(Object.keys(created).includes("builder"), false);
     assert.equal(Object.keys(created).includes("publish"), false);
     assert.equal(Object.keys(created).includes("theme"), false);
+  });
+
+  it("preserves the strict 11 best-partial rejection gate", () => {
+    assert.equal(shouldRejectBestPartialForStrict11(11), true);
+    assert.equal(shouldRejectBestPartialForStrict11(9), false);
+    assert.equal(shouldRejectBestPartialForStrict11(13), false);
   });
 });
