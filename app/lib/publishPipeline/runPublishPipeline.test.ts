@@ -2,7 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyCluesAndOverridesWithPolicies,
+  blockForbiddenAnswerRuns,
+  clueLanguageLooksValid,
+  clueMentionsAnswer,
+  createRequestModelCluesService,
   deriveEntriesFromGrid,
+  isPlaceholderClue,
+  pruneForbiddenPublishAnswersIfPossible,
+  pruneMaskedDuplicateAnswers,
   publishQualityIssueWithPolicies,
   repairPublishCluesWithPolicies,
   requestModelCluesWithPolicies,
@@ -75,6 +82,39 @@ test("requestModelCluesWithPolicies preserves payload and parses valid clues", a
   assert.equal((client.calls[0] as { max_tokens: number }).max_tokens, 1600);
 });
 
+test("createRequestModelCluesService binds prompt, models, policies, and preserves call count", async () => {
+  const client = fakeClient(JSON.stringify({ clues: [{ answer: "OCEAN", clue: "Theme-safe clue" }] }));
+  const requestModelClues = createRequestModelCluesService({
+    answerbankSearchModel: "search-model",
+    clueModel: "clue-model",
+    policies: okPolicies,
+  });
+
+  const clues = await requestModelClues({
+    client,
+    theme: "ocean science",
+    language: "en",
+    items: [{ answer: "OCEAN", thematic: true }],
+  });
+
+  assert.equal(clues.get("OCEAN"), "Theme-safe clue");
+  assert.equal(client.calls.length, 1);
+  const call = client.calls[0] as {
+    model: string;
+    temperature: number;
+    max_tokens: number;
+    response_format: { type: string };
+    messages: Array<{ role: string; content: string }>;
+  };
+  assert.equal(call.model, "search-model");
+  assert.equal(call.temperature, 0);
+  assert.equal(call.max_tokens, 1600);
+  assert.deepEqual(call.response_format, { type: "json_object" });
+  assert.equal(call.messages[0].role, "system");
+  assert.equal(call.messages[1].role, "user");
+  assert.match(call.messages[1].content, /You are a crossword editor\./);
+});
+
 test("requestModelCluesWithPolicies retries missing clues and logs retry failures", async () => {
   const warnings: unknown[] = [];
   let call = 0;
@@ -112,6 +152,17 @@ test("sanitizeModelClueText strips generated context prefix only for matching la
     sanitizeModelClueText("contexto temÃ¡tico para tema: Pista concreta", "es"),
     "contexto temÃ¡tico para tema: Pista concreta"
   );
+});
+
+test("clue hygiene helpers preserve placeholder, mention, and language rules", () => {
+  assert.equal(isPlaceholderClue("Themed entry", "en"), true);
+  assert.equal(isPlaceholderClue("Word (5 letters)", "en"), true);
+  assert.equal(isPlaceholderClue("Entrada tematica", "es"), true);
+  assert.equal(isPlaceholderClue("Concrete clue", "en"), false);
+  assert.equal(clueMentionsAnswer("A strong OCEAN clue", "OCEAN"), true);
+  assert.equal(clueMentionsAnswer("A strong sea clue", "SEA"), false);
+  assert.equal(clueLanguageLooksValid("known hiking lake", "es"), false);
+  assert.equal(clueLanguageLooksValid("cerro popular", "en"), false);
 });
 
 test("applyCluesAndOverridesWithPolicies maps clues and falls back when invalid", () => {
@@ -190,6 +241,39 @@ test("publishQualityIssueWithPolicies preserves publication rejection reasons", 
     publishQualityIssueWithPolicies([...entries, { ...entries[0], answer: "ITEMS" }], new Set(), "en", 1, "", policies),
     "duplicate-variant:ITEM/ITEMS"
   );
+});
+
+test("publish cleanup prunes duplicates, preserves minimum entries, and blocks forbidden runs", () => {
+  const entries: Entry[] = [
+    { number: 1, row: 0, col: 0, direction: "across", answer: "ITEM", clue: "Useful object" },
+    { number: 2, row: 1, col: 0, direction: "across", answer: "ITEMS", clue: "Useful objects" },
+    { number: 3, row: 2, col: 0, direction: "across", answer: "KEEP", clue: "Retain" },
+  ];
+
+  assert.deepEqual(pruneMaskedDuplicateAnswers(entries).map((entry) => entry.answer), ["ITEM", "KEEP"]);
+  assert.equal(
+    pruneForbiddenPublishAnswersIfPossible(entries, 3, {
+      isForbiddenPublishAnswer: (answer) => answer === "ITEMS",
+    }),
+    entries
+  );
+  assert.deepEqual(
+    pruneForbiddenPublishAnswersIfPossible(entries, 2, {
+      isForbiddenPublishAnswer: (answer) => answer === "ITEMS",
+    }).map((entry) => entry.answer),
+    ["ITEM", "KEEP"]
+  );
+
+  const grid = [
+    ["B", "A", "D"],
+    ["#", "#", "#"],
+    ["O", "K", "A"],
+  ];
+  const cleaned = blockForbiddenAnswerRuns(grid, 3, {
+    isForbiddenPublishAnswer: (answer) => answer === "BAD",
+  });
+  assert.deepEqual(cleaned[0], ["#", "#", "#"]);
+  assert.notEqual(cleaned, grid);
 });
 
 test("runPublishPipeline derives, requests clues, repairs entries, and returns final crossword metadata", async () => {

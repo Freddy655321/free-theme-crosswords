@@ -65,14 +65,19 @@ import {
 } from "@/app/lib/bestPartial";
 import {
   applyCluesAndOverridesWithPolicies,
+  CLUEBANK_PROMPT,
+  clueLanguageLooksValid,
+  clueMentionsAnswer,
+  createPublishCleanupServices,
+  createRequestModelCluesService,
   deriveEntriesFromGrid as deriveEntriesFromGridFromPublish,
+  isPlaceholderClue,
+  pruneMaskedDuplicateAnswers,
   publishQualityIssueWithPolicies,
   repairPublishCluesWithPolicies,
-  requestModelCluesWithPolicies,
   runPublishPipeline,
-  sanitizeModelClueText as sanitizeModelClueTextFromPublish,
+  sanitizeModelClueText,
   type ClueRequestItem as PublishClueRequestItem,
-  type ClueGenerationClient,
 } from "@/app/lib/publishPipeline";
 import {
   blockShortRunsOnly,
@@ -84,7 +89,6 @@ import {
   gridToStrings,
   hasShortLetterRuns,
   isAcceptableGridWithPolicies,
-  keepLargestConnectedComponent,
   maxGenericContextEntriesForPublish,
   minCoreThematicEntriesForPublish,
   minCrossedEntriesForPublish,
@@ -94,7 +98,6 @@ import {
   minPublishEntriesForSize,
   minThematicEntriesForPublish,
   paintBlocks,
-  pruneDanglingRuns,
   pruneWeakEntriesPreservingCrosses,
   sanitizeUncheckedGrid,
 } from "@/app/lib/gridValidation";
@@ -407,15 +410,6 @@ function noteLooksWeakThematicContext(note: string, language: "es" | "en"): bool
   );
 }
 
-function clueLanguageLooksValid(clue: string, language: "es" | "en"): boolean {
-  const c = clue.toLowerCase();
-  if (language === "es") {
-    return !/\b(the|of|for|from|near|known|popular|hiking|mountain|skiing|lake|river|word|entry|coastal|areas|explore|museum|showcasing|history|fishing|pastime|historical|figure|summer|snow|snow-covered|peaks|visitors|specific|region|company|based|high-tech|tech)\b/.test(c);
-  }
-
-  return !/\b(el|la|los|las|de|del|para|cerca|conocido|popular|cerro|lago|rio|río)\b/.test(c);
-}
-
 function publishQualityIssue(
   entries: Entry[],
   thematicSet: Set<string>,
@@ -445,22 +439,6 @@ function publishQualityIssue(
   });
 }
 
-function pruneMaskedDuplicateAnswers(entries: Entry[]): Entry[] {
-  const answers = new Set(entries.map((entry) => entry.answer));
-  return entries.filter((entry) => {
-    const answer = entry.answer;
-    if (answer.length > 3 && answer.endsWith("S") && answers.has(answer.slice(0, -1))) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function pruneForbiddenPublishAnswersIfPossible(entries: Entry[], minEntries: number): Entry[] {
-  const pruned = entries.filter((entry) => !isForbiddenPublishAnswer(entry.answer));
-  return pruned.length >= minEntries ? pruned : entries;
-}
-
 function pruneMaskedDuplicateCandidates(candidates: WordCandidate[]): WordCandidate[] {
   const answers = new Set(candidates.map((candidate) => candidate.answer));
   return candidates.filter((candidate) => {
@@ -480,6 +458,15 @@ function isForbiddenPublishAnswer(answer: string): boolean {
   if (isLikelyBadAnswer(a) && !ALWAYS_ALLOW_ANSWERS.has(a)) return true;
   return false;
 }
+
+const publishCleanupPolicies = {
+  isForbiddenPublishAnswer,
+};
+
+const {
+  pruneForbiddenPublishAnswersIfPossible,
+  blockForbiddenAnswerRuns,
+} = createPublishCleanupServices(publishCleanupPolicies);
 
 function isKnownIncompleteTitleForTheme(theme: string, answer: string): boolean {
   const t = normalizeAnswer(theme);
@@ -508,27 +495,6 @@ function answerLanguageLooksValidForPuzzle(answer: string, language: "es" | "en"
   if (language === "es" && SPANISH_WRONG_LANGUAGE_ANSWERS.has(a)) return false;
   if (language === "es" && /(?:RIVER|HUT|LAKE|TRAIL|LODGE|SKIRESORT|SNOWPARK)$/.test(a)) return false;
   return true;
-}
-
-function blockForbiddenAnswerRuns(grid: string[][], minLen: number): string[][] {
-  let out = grid.map((row) => row.slice());
-  const badEntries = deriveEntriesFromGrid(out, minLen).filter((entry) =>
-    isForbiddenPublishAnswer(entry.answer)
-  );
-
-  if (badEntries.length === 0) return out;
-
-  for (const entry of badEntries) {
-    for (let i = 0; i < entry.answer.length; i++) {
-      const r = entry.direction === "down" ? entry.row + i : entry.row;
-      const c = entry.direction === "across" ? entry.col + i : entry.col;
-      if (inBounds(out.length, r, c)) out[r][c] = "#";
-    }
-  }
-
-  out = pruneDanglingRuns(out, minLen);
-  out = keepLargestConnectedComponent(out);
-  return out;
 }
 
 function fallbackClueForPublishRepair(
@@ -917,13 +883,6 @@ function repairPublishClues(
     clueLooksOffTheme,
     clueMentionsAnswer,
   });
-}
-
-function clueMentionsAnswer(clue: string, answer: string): boolean {
-  const lowerClue = clue.toLowerCase();
-  const lowerAns = answer.toLowerCase();
-  if (lowerAns.length <= 3) return false;
-  return lowerClue.includes(lowerAns);
 }
 
 function clueLooksOffTheme(theme: string, clue: string): boolean {
@@ -2791,37 +2750,6 @@ function buildPublishThematicSetFromPool(opts: {
   return thematicSet;
 }
 
-function isPlaceholderClue(clue: string, language: "es" | "en"): boolean {
-  const c = clue.trim().toLowerCase();
-  if (!c) return true;
-
-  if (language === "en") {
-    if (c === "brief definition.") return true;
-    if (/^short definition/.test(c)) return true;
-    if (/^common word/.test(c)) return true;
-    if (/^themed entry/.test(c)) return true;
-    if (/^theme context for /.test(c)) return true;
-    if (/^word \(\d+ letters\)/.test(c)) return true;
-    if (c === "place associated with california") return true;
-    if (c === "california-related entry") return true;
-    if (/^california entry/.test(c)) return true;
-  } else {
-    if (c === "definición breve." || c === "definicion breve.") return true;
-    if (/^contexto tem[aá]tico para /.test(c)) return true;
-    if (/^entrada com[uÃº]n de crucigrama/.test(c)) return true;
-    if (/^sobre .+\(\d+ letras\)$/.test(c)) return true;
-    if (/^palabra\b/.test(c)) return true;
-    if (/^sobre [^,.;:!?]+$/.test(c)) return true;
-    if (/^entrada tematica\b/.test(c) || /^entrada temática\b/.test(c)) return true;
-  }
-
-  return false;
-}
-
-function sanitizeModelClueText(clue: string, language: "es" | "en"): string {
-  return sanitizeModelClueTextFromPublish(clue, language);
-}
-
 async function topUpAnswersRobust(opts: {
   client: OpenAI;
   theme: string;
@@ -3603,6 +3531,24 @@ function extractPatternSlots(pattern: string[]): PatternSlot[] {
   return slots;
 }
 
+type ClueRequestItem = PublishClueRequestItem;
+
+const requestModelClues = createRequestModelCluesService({
+  answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
+  clueModel: CLUE_MODEL,
+  policies: {
+    isBadClue,
+    clueMentionsAnswer,
+    clueMakesUnstableTemporalClaim,
+    clueMislabelsPartialPersonAnswer,
+    clueMislabelsKnownPartialTitle,
+    clueLooksOffTheme,
+    warnClueRetryFailed: (payload) => {
+      console.warn("[generate-crossword] clue retry failed", payload);
+    },
+  },
+});
+
 const legacyBuilderDependencies: LegacyBuilderDependencies = {
   alwaysAllowAnswers: ALWAYS_ALLOW_ANSWERS,
   asciiAnswerPattern: ASCII_A_TO_Z,
@@ -3735,52 +3681,6 @@ const themeFirstRescueDependencies: ThemeFirstRescueDependencies = {
   warn: console.warn,
 };
 
-// -------------------- OpenAI prompts (answers -> clues) --------------------
-
-const CLUEBANK_PROMPT = `
-You are a crossword editor.
-
-Return ONLY a JSON object with this schema:
-{
-  "clues": [
-    { "answer": string, "clue": string }
-  ]
-}
-
-INPUT FORMAT:
-You will receive a JSON array named ITEMS where each item is:
-{ "answer": string, "thematic": boolean }
-
-Hard rules:
-- Output JSON ONLY. No markdown. No commentary.
-- Each "answer" MUST match an input item "answer" EXACTLY (UPPERCASE A–Z and digits if present).
-- Each "clue" must be in the requested LANGUAGE and must read like a real crossword clue.
-- Keep each clue SHORT (max 55 characters).
-- Do NOT include the answer text (or obvious substrings) in the clue.
-- Do NOT use placeholder text like "Thematic entry" or "Definition".
-
-CRITICAL FACTUALITY RULE:
-- Never invent song titles, track lists, album contents, dates, or specific claims.
-- If you are not 100% sure about a specific fact, write a safer, non-specific clue.
-
-THEME POLICY (depends on thematic flag):
-- If thematic=true: the clue MUST mention the theme (directly or by clear band/album/mascot context),
-  but must stay FACTUAL. If unsure, use safe clues like "Megadeth album title" / "Megadeth mascot" /
-  "Megadeth-related term" rather than a specific (possibly false) claim.
-- If thematic=true for a place theme, prefer a factual local clue: lake, hill, neighborhood, route, activity,
-  food, flora/fauna, province, region, or landmark associated with the place. Do NOT use a generic dictionary
-  clue when the answer was selected as thematic.
-- If thematic=false: the clue MUST be a normal general crossword clue (definition/synonym),
-  and MUST NOT claim it is a song/album/member/etc. Do NOT mention album names or “track from…”.
-
-Now produce one clue per input item.
-
-THEME: \${theme}
-LANGUAGE: \${languageLabel}
-ITEMS:
-\${itemsJson}
-`;
-
 // -------------------- Clue plumbing --------------------
 
 function buildThematicClueRequestHint(
@@ -3805,36 +3705,6 @@ function buildThematicClueRequestHint(
   }
 
   return null;
-}
-
-type ClueRequestItem = PublishClueRequestItem;
-
-async function requestModelClues(opts: {
-  client: ClueGenerationClient;
-  theme: string;
-  language: "es" | "en";
-  items: ClueRequestItem[];
-}): Promise<Map<string, string>> {
-  return requestModelCluesWithPolicies({
-    client: opts.client as ClueGenerationClient,
-    theme: opts.theme,
-    language: opts.language,
-    items: opts.items,
-    cluebankPrompt: CLUEBANK_PROMPT,
-    answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
-    clueModel: CLUE_MODEL,
-    policies: {
-      isBadClue,
-      clueMentionsAnswer,
-      clueMakesUnstableTemporalClaim,
-      clueMislabelsPartialPersonAnswer,
-      clueMislabelsKnownPartialTitle,
-      clueLooksOffTheme,
-      warnClueRetryFailed: (payload) => {
-        console.warn("[generate-crossword] clue retry failed", payload);
-      },
-    },
-  });
 }
 
 async function tryOpeningDeterministic11(opts: {

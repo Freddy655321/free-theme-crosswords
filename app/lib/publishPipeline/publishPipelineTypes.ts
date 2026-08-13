@@ -56,6 +56,19 @@ export type RequestModelCluesInput = {
   policies: RequestModelCluesPolicies;
 };
 
+export type RequestModelCluesService = (opts: {
+  client: ClueGenerationClient;
+  theme: string;
+  language: PublishPipelineLanguage;
+  items: ClueRequestItem[];
+}) => Promise<Map<string, string>>;
+
+export type CreateRequestModelCluesServiceInput = {
+  answerbankSearchModel: string;
+  clueModel: string;
+  policies: RequestModelCluesPolicies;
+};
+
 export type ApplyCluesPolicies = {
   getThemeClueOverrides(theme: string): Record<string, { es: string; en: string }>;
   specificThematicFallbackClue(
@@ -115,6 +128,10 @@ export type PublishQualityPolicies = {
   lowValueContextlessAnswers: Set<string>;
   clueLooksWeakGeneratedFallback(clue: string, language: PublishPipelineLanguage): boolean;
   minEntriesForSize(size: number): number;
+};
+
+export type PublishCleanupPolicies = {
+  isForbiddenPublishAnswer(answer: string): boolean;
 };
 
 export type RunPublishPipelineInput = {

@@ -1,9 +1,98 @@
 import type { RawClueBank } from "@/app/lib/crosswordTypes";
 import { ASCII_A_TO_Z, normalizeAnswer, safeJson } from "@/app/lib/crosswordUtils";
 import type {
+  CreateRequestModelCluesServiceInput,
   RequestModelCluesInput,
+  RequestModelCluesService,
   PublishPipelineLanguage,
 } from "./publishPipelineTypes";
+
+export const CLUEBANK_PROMPT = `
+You are a crossword editor.
+
+Return ONLY a JSON object with this schema:
+{
+  "clues": [
+    { "answer": string, "clue": string }
+  ]
+}
+
+INPUT FORMAT:
+You will receive a JSON array named ITEMS where each item is:
+{ "answer": string, "thematic": boolean }
+
+Hard rules:
+- Output JSON ONLY. No markdown. No commentary.
+- Each "answer" MUST match an input item "answer" EXACTLY (UPPERCASE A–Z and digits if present).
+- Each "clue" must be in the requested LANGUAGE and must read like a real crossword clue.
+- Keep each clue SHORT (max 55 characters).
+- Do NOT include the answer text (or obvious substrings) in the clue.
+- Do NOT use placeholder text like "Thematic entry" or "Definition".
+
+CRITICAL FACTUALITY RULE:
+- Never invent song titles, track lists, album contents, dates, or specific claims.
+- If you are not 100% sure about a specific fact, write a safer, non-specific clue.
+
+THEME POLICY (depends on thematic flag):
+- If thematic=true: the clue MUST mention the theme (directly or by clear band/album/mascot context),
+  but must stay FACTUAL. If unsure, use safe clues like "Megadeth album title" / "Megadeth mascot" /
+  "Megadeth-related term" rather than a specific (possibly false) claim.
+- If thematic=true for a place theme, prefer a factual local clue: lake, hill, neighborhood, route, activity,
+  food, flora/fauna, province, region, or landmark associated with the place. Do NOT use a generic dictionary
+  clue when the answer was selected as thematic.
+- If thematic=false: the clue MUST be a normal general crossword clue (definition/synonym),
+  and MUST NOT claim it is a song/album/member/etc. Do NOT mention album names or “track from…”.
+
+Now produce one clue per input item.
+
+THEME: \${theme}
+LANGUAGE: \${languageLabel}
+ITEMS:
+\${itemsJson}
+`;
+
+export function isPlaceholderClue(clue: string, language: PublishPipelineLanguage): boolean {
+  const c = clue.trim().toLowerCase();
+  if (!c) return true;
+
+  if (language === "en") {
+    if (c === "brief definition.") return true;
+    if (/^short definition/.test(c)) return true;
+    if (/^common word/.test(c)) return true;
+    if (/^themed entry/.test(c)) return true;
+    if (/^theme context for /.test(c)) return true;
+    if (/^word \(\d+ letters\)/.test(c)) return true;
+    if (c === "place associated with california") return true;
+    if (c === "california-related entry") return true;
+    if (/^california entry/.test(c)) return true;
+  } else {
+    if (c === "definiciÃ³n breve." || c === "definicion breve.") return true;
+    if (/^contexto tem[aÃ¡]tico para /.test(c)) return true;
+    if (/^entrada com[uÃƒÂº]n de crucigrama/.test(c)) return true;
+    if (/^sobre .+\(\d+ letras\)$/.test(c)) return true;
+    if (/^palabra\b/.test(c)) return true;
+    if (/^sobre [^,.;:!?]+$/.test(c)) return true;
+    if (/^entrada tematica\b/.test(c) || /^entrada temÃ¡tica\b/.test(c)) return true;
+  }
+
+  return false;
+}
+
+export function clueMentionsAnswer(clue: string, answer: string): boolean {
+  const lowerClue = clue.toLowerCase();
+  const lowerAns = answer.toLowerCase();
+  if (lowerAns.length <= 3) return false;
+  return lowerClue.includes(lowerAns);
+}
+
+export function clueLanguageLooksValid(clue: string, language: PublishPipelineLanguage): boolean {
+  const c = clue.toLowerCase();
+  if (language === "es") {
+    return !/\b(the|of|for|from|near|known|popular|hiking|mountain|skiing|lake|river|word|entry|coastal|areas|explore|museum|showcasing|history|fishing|pastime|historical|figure|summer|snow|snow-covered|peaks|visitors|specific|region|company|based|high-tech|tech)\b/.test(c);
+  }
+
+  return !/\b(el|la|los|las|de|del|para|cerca|conocido|popular|cerro|lago|rio|rÃ­o)\b/.test(c);
+}
 
 export function sanitizeModelClueText(clue: string, language: PublishPipelineLanguage): string {
   let cleaned = clue.replace(/\s+/g, " ").trim();
@@ -13,6 +102,22 @@ export function sanitizeModelClueText(clue: string, language: PublishPipelineLan
     cleaned = cleaned.replace(/^theme context for [^:]+:\s*/i, "").trim();
   }
   return cleaned;
+}
+
+export function createRequestModelCluesService(
+  opts: CreateRequestModelCluesServiceInput
+): RequestModelCluesService {
+  return ({ client, theme, language, items }) =>
+    requestModelCluesWithPolicies({
+      client,
+      theme,
+      language,
+      items,
+      cluebankPrompt: CLUEBANK_PROMPT,
+      answerbankSearchModel: opts.answerbankSearchModel,
+      clueModel: opts.clueModel,
+      policies: opts.policies,
+    });
 }
 
 export async function requestModelCluesWithPolicies(opts: RequestModelCluesInput): Promise<Map<string, string>> {
