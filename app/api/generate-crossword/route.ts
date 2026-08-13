@@ -119,9 +119,6 @@ import {
   pickPoolForSize,
   runLegacyBuilder,
   type LegacyBuilderDependencies,
-  type LegacyBuilderInputBase,
-  type LegacyBuilderMode,
-  type LegacyBuilderResult,
 } from "@/app/lib/legacyBuilder";
 import { runFreeformBuilder, type FreeformBuilderDependencies } from "@/app/lib/freeformBuilder";
 
@@ -3693,14 +3690,6 @@ function extractPatternSlots(pattern: string[]): PatternSlot[] {
   return slots;
 }
 
-function runLegacyBuilderMode(mode: LegacyBuilderMode, opts: LegacyBuilderInputBase): LegacyBuilderResult | null {
-  return runLegacyBuilder({
-    ...opts,
-    mode,
-    dependencies: legacyBuilderDependencies,
-  });
-}
-
 const legacyBuilderDependencies: LegacyBuilderDependencies = {
   alwaysAllowAnswers: ALWAYS_ALLOW_ANSWERS,
   asciiAnswerPattern: ASCII_A_TO_Z,
@@ -3735,35 +3724,6 @@ const legacyBuilderDependencies: LegacyBuilderDependencies = {
   spanishFillerWords: SPANISH_FILLER_WORDS,
   weakContextDictionaryWords: WEAK_CONTEXT_DICTIONARY_WORDS,
 };
-
-function constructPatternCrossword11(opts: LegacyBuilderInputBase): LegacyBuilderResult | null {
-  return runLegacyBuilderMode("pattern-11", opts);
-}
-
-function constructCompactPatternCrossword11(opts: LegacyBuilderInputBase): LegacyBuilderResult | null {
-  return runLegacyBuilderMode("compact-pattern-11", opts);
-}
-
-function constructBeamCrossword11(opts: LegacyBuilderInputBase): LegacyBuilderResult | null {
-  return runLegacyBuilderMode("beam-11", opts);
-}
-
-function constructStrictCrossword11(opts: LegacyBuilderInputBase): LegacyBuilderResult | null {
-  return runLegacyBuilderMode("strict-11", opts);
-}
-function constructFreeformCrossword(opts: {
-  size: number;
-  candidates: WordCandidate[];
-  seed: number;
-  deadlineMs?: number;
-  maxPlacedWords?: number;
-  maxBuilds?: number;
-}): { grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> } | null {
-  return runFreeformBuilder({
-    ...opts,
-    dependencies: freeformBuilderDependencies,
-  });
-}
 
 const gridEnhancementDependencies: GridEnhancementDependencies = {
   isForbiddenPublishAnswer,
@@ -3811,13 +3771,30 @@ const openAiRepairServicesDependencies: OpenAiRepairServicesDependencies = {
   applyCluesAndOverrides,
   repairPublishClues,
   publishQualityIssue,
-  augmentNoShortGridWithCandidates,
+  augmentNoShortGridWithCandidates: (
+    grid,
+    candidates,
+    minLen,
+    targetEntries,
+    minimumReturnEntries
+  ) =>
+    augmentNoShortGridWithCandidatesWithDependencies(
+      grid,
+      candidates,
+      minLen,
+      targetEntries,
+      minimumReturnEntries,
+      gridEnhancementDependencies
+    ),
 };
 
 const themeFirstRescueDependencies: ThemeFirstRescueDependencies = {
-  buildBeamCrossword11: constructBeamCrossword11,
-  buildCompactPatternCrossword11: constructCompactPatternCrossword11,
-  buildPatternCrossword11: constructPatternCrossword11,
+  buildBeamCrossword11: (opts) =>
+    runLegacyBuilder({ mode: "beam-11", dependencies: legacyBuilderDependencies, ...opts }),
+  buildCompactPatternCrossword11: (opts) =>
+    runLegacyBuilder({ mode: "compact-pattern-11", dependencies: legacyBuilderDependencies, ...opts }),
+  buildPatternCrossword11: (opts) =>
+    runLegacyBuilder({ mode: "pattern-11", dependencies: legacyBuilderDependencies, ...opts }),
   rebuildGridFromAllowedEntries,
   deriveEntriesFromGrid,
   checkedCellStats,
@@ -3839,35 +3816,6 @@ const themeFirstRescueDependencies: ThemeFirstRescueDependencies = {
   now: Date.now,
   warn: console.warn,
 };
-
-function densifyCleanGrid11(opts: {
-  theme: string;
-  grid: string[][];
-  candidates: WordCandidate[];
-  targetEntries: number;
-  seed: number;
-  deadlineMs?: number;
-  pruneWeakEntries?: boolean;
-}): { grid: string[][]; derived: DerivedEntry[]; added: string[]; meta: Record<string, unknown> } | null {
-  return densifyCleanGrid11WithDependencies({
-    ...opts,
-    dependencies: gridEnhancementDependencies,
-  });
-}
-
-async function generatePatternMatchedRepairWords(opts: {
-  client: OpenAI;
-  theme: string;
-  language: "es" | "en";
-  grid: string[][];
-  entries: DerivedEntry[];
-  existingAnswers: string[];
-}) {
-  return generatePatternMatchedRepairWordsWithDependencies({
-    ...opts,
-    dependencies: openAiRepairServicesDependencies,
-  });
-}
 
 // -------------------- OpenAI prompts (answers -> clues) --------------------
 
@@ -3916,79 +3864,6 @@ ITEMS:
 `;
 
 // -------------------- Clue plumbing --------------------
-
-async function requestValidatedLayoutProposal(opts: {
-  client: OpenAI;
-  theme: string;
-  language: "es" | "en";
-  size: number;
-  pool: WordCandidate[];
-  themeSet: Set<string>;
-}): Promise<{ grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> } | null> {
-  return requestValidatedLayoutProposalWithDependencies({
-    ...opts,
-    dependencies: openAiRepairServicesDependencies,
-  });
-}
-
-async function requestDirectPlayableCrossword11(opts: {
-  client: OpenAI;
-  theme: string;
-  language: "es" | "en";
-  attempt: number;
-}): Promise<Crossword | null> {
-  return requestDirectPlayableCrossword11WithDependencies({
-    ...opts,
-    dependencies: openAiRepairServicesDependencies,
-  });
-}
-
-async function requestValidatedPatternAssignment11(opts: {
-  client: OpenAI;
-  theme: string;
-  language: "es" | "en";
-  size: number;
-  pool: WordCandidate[];
-  themeSet: Set<string>;
-}): Promise<{ grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> } | null> {
-  return requestValidatedPatternAssignment11WithDependencies({
-    ...opts,
-    dependencies: openAiRepairServicesDependencies,
-  });
-}
-
-async function requestGeneratedPatternGrid11(opts: {
-  client: OpenAI;
-  theme: string;
-  language: "es" | "en";
-  size: number;
-  attempt: number;
-}): Promise<{
-  grid: string[][];
-  usedAnswers: string[];
-  thematicAnswers: string[];
-  notes: Map<string, string>;
-  meta: Record<string, unknown>;
-} | null> {
-  return requestGeneratedPatternGrid11WithDependencies({
-    ...opts,
-    dependencies: openAiRepairServicesDependencies,
-  });
-}
-
-async function requestValidatedGridProposal(opts: {
-  client: OpenAI;
-  theme: string;
-  language: "es" | "en";
-  size: number;
-  pool: WordCandidate[];
-  themeSet: Set<string>;
-}): Promise<{ grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> } | null> {
-  return requestValidatedGridProposalWithDependencies({
-    ...opts,
-    dependencies: openAiRepairServicesDependencies,
-  });
-}
 
 function buildThematicClueRequestHint(
   theme: string,
@@ -4079,7 +3954,7 @@ async function tryOpeningDeterministic11(opts: {
     extraMeta,
   } = opts;
 
-  const opening = constructOpeningCrossword11({
+  const opening = runOpeningBuilder({ dependencies: openingBuilderDependencies,
     theme,
     candidates,
     seed,
@@ -4291,21 +4166,6 @@ function applyCluesAndOverrides(
   });
 }
 
-async function buildThemeFirstRescueCrossword(opts: {
-  client: OpenAI;
-  theme: string;
-  language: "es" | "en";
-  size: number;
-  pool: WordCandidate[];
-  notesByAnswer: Map<string, string>;
-  trustedThematicSet: Set<string>;
-  seedBase: number;
-}): Promise<Crossword | null> {
-  return runThemeFirstRescue({
-    ...opts,
-    dependencies: themeFirstRescueDependencies,
-  });
-}
 const gridReconstructionPolicies: GridReconstructionPolicies = {
   applyCluesAndOverrides,
   isAlwaysAllowedAnswer: (answer) => ALWAYS_ALLOW_ANSWERS.has(answer),
@@ -4314,166 +4174,6 @@ const gridReconstructionPolicies: GridReconstructionPolicies = {
   isPlaceholderClue,
   specificThematicFallbackClue,
 };
-
-function rebuildPlayableCrossword(
-  theme: string,
-  size: number,
-  entries: Entry[],
-  language: "es" | "en",
-  allowedAnswers: Set<string>
-): { grid: string[][]; entries: Entry[] } | null {
-  return rebuildPlayableCrosswordWithPolicies(
-    theme,
-    size,
-    entries,
-    language,
-    allowedAnswers,
-    gridReconstructionPolicies
-  );
-}
-
-function rebuildExactPublishableCrossword(
-  theme: string,
-  size: number,
-  entries: Entry[],
-  language: "es" | "en",
-  allowedAnswers: Set<string>,
-  minEntries = 3
-): { grid: string[][]; entries: Entry[] } | null {
-  return rebuildExactPublishableCrosswordWithPolicies(
-    theme,
-    size,
-    entries,
-    language,
-    allowedAnswers,
-    gridReconstructionPolicies,
-    minEntries
-  );
-}
-
-function rebuildExactFullyCheckedPublishableCrossword(
-  theme: string,
-  size: number,
-  entries: Entry[],
-  language: "es" | "en",
-  allowedAnswers: Set<string>,
-  minEntries = 3
-): { grid: string[][]; entries: Entry[] } | null {
-  return rebuildExactFullyCheckedPublishableCrosswordWithPolicies(
-    theme,
-    size,
-    entries,
-    language,
-    allowedAnswers,
-    gridReconstructionPolicies,
-    minEntries
-  );
-}
-
-function rebuildFullyCheckedPublishableCrossword(
-  theme: string,
-  size: number,
-  grid: string[][],
-  language: "es" | "en",
-  allowedAnswers: Set<string>,
-  clueByAnswer: Map<string, string>,
-  minEntries = 4
-): { grid: string[][]; entries: Entry[] } | null {
-  return rebuildFullyCheckedPublishableCrosswordWithPolicies(
-    theme,
-    size,
-    grid,
-    language,
-    allowedAnswers,
-    clueByAnswer,
-    gridReconstructionPolicies,
-    minEntries
-  );
-}
-
-function rebuildSanitizedFullyCheckedPublishableCrossword(
-  theme: string,
-  size: number,
-  grid: string[][],
-  language: "es" | "en",
-  allowedAnswers: Set<string>,
-  clueByAnswer: Map<string, string>,
-  minEntries: number
-): { grid: string[][]; entries: Entry[] } | null {
-  return rebuildSanitizedFullyCheckedPublishableCrosswordWithPolicies(
-    theme,
-    size,
-    grid,
-    language,
-    allowedAnswers,
-    clueByAnswer,
-    gridReconstructionPolicies,
-    minEntries
-  );
-}
-
-function rebuildNoShortRunPublishableCrossword(
-  theme: string,
-  size: number,
-  entries: Entry[],
-  language: "es" | "en",
-  thematicSet: Set<string>,
-  minEntries: number,
-  minThematicEntries: number
-): { grid: string[][]; entries: Entry[] } | null {
-  return rebuildNoShortRunPublishableCrosswordWithPolicies(
-    theme,
-    size,
-    entries,
-    language,
-    thematicSet,
-    minEntries,
-    minThematicEntries,
-    gridReconstructionPolicies
-  );
-}
-
-function augmentNoShortGridWithCandidates(
-  grid: string[][],
-  candidates: WordCandidate[],
-  minLen: number,
-  targetEntries: number,
-  minimumReturnEntries = targetEntries
-): { grid: string[][]; derived: DerivedEntry[] } | null {
-  return augmentNoShortGridWithCandidatesWithDependencies(
-    grid,
-    candidates,
-    minLen,
-    targetEntries,
-    minimumReturnEntries,
-    gridEnhancementDependencies
-  );
-}
-
-function extendGridWithCrossedPair11(opts: {
-  grid: string[][];
-  candidates: WordCandidate[];
-  targetEntries: number;
-  seed: number;
-}): { grid: string[][]; derived: DerivedEntry[]; addedAnswers: string[] } | null {
-  return extendGridWithCrossedPair11WithDependencies({
-    ...opts,
-    dependencies: gridEnhancementDependencies,
-  });
-}
-
-function constructOpeningCrossword11(opts: {
-  theme: string;
-  candidates: WordCandidate[];
-  seed: number;
-  targetEntries: number;
-  deadlineMs?: number;
-}): { grid: string[][]; derived: DerivedEntry[]; usedAnswers: string[]; meta: Record<string, unknown> } | null {
-  return runOpeningBuilder({
-    ...opts,
-    dependencies: openingBuilderDependencies,
-  });
-}
 
 // -------------------- Demo fallback --------------------
 
@@ -4489,18 +4189,18 @@ function getDemoCrossword(size: number, theme: string, language: "es" | "en") {
     const seed = (normalizeAnswer(theme).length * 2654435761 + size * 1013904223) >>> 0;
     const built =
       size === 11
-        ? constructStrictCrossword11({
+        ? runLegacyBuilder({ mode: "strict-11", dependencies: legacyBuilderDependencies,
             theme,
             size,
             candidates,
             seed,
           }) ??
-          constructFreeformCrossword({
+          runFreeformBuilder({ dependencies: freeformBuilderDependencies,
             size,
             seed,
             candidates,
           })
-        : constructFreeformCrossword({
+        : runFreeformBuilder({ dependencies: freeformBuilderDependencies,
             size,
             seed,
             candidates,
@@ -4848,7 +4548,7 @@ export async function POST(req: NextRequest) {
 
   if (n === 11 && process.env.ENABLE_DIRECT_MODEL_11 === "1") {
     try {
-      const direct = await requestDirectPlayableCrossword11({
+      const direct = await requestDirectPlayableCrossword11WithDependencies({ dependencies: openAiRepairServicesDependencies,
         client,
         theme,
         language,
@@ -4871,7 +4571,7 @@ export async function POST(req: NextRequest) {
 
   if (n === 11 && process.env.OPENAI_FIXED_PATTERN_GRID === "1") {
     try {
-      const generatedFixedGrid = await requestGeneratedPatternGrid11({
+      const generatedFixedGrid = await requestGeneratedPatternGrid11WithDependencies({ dependencies: openAiRepairServicesDependencies,
         client,
         theme,
         language,
@@ -5430,7 +5130,7 @@ console.warn("[generate-crossword] ok: pool", {
 
       const dictionaryPatternLayoutCandidate =
         !cspBuilt && n === 11 && process.env.ENABLE_DICTIONARY_PATTERN_11 === "1"
-          ? constructPatternCrossword11({
+          ? runLegacyBuilder({ mode: "pattern-11", dependencies: legacyBuilderDependencies,
               theme,
               size: n,
               candidates: pool,
@@ -5467,7 +5167,7 @@ console.warn("[generate-crossword] ok: pool", {
       ) {
         {
           try {
-            const generatedFixedGrid = await requestGeneratedPatternGrid11({
+            const generatedFixedGrid = await requestGeneratedPatternGrid11WithDependencies({ dependencies: openAiRepairServicesDependencies,
               client,
               theme,
               language,
@@ -5499,7 +5199,7 @@ console.warn("[generate-crossword] ok: pool", {
 
         if (!earlyValidatedLayout) {
           try {
-            earlyValidatedLayout = await requestValidatedPatternAssignment11({
+            earlyValidatedLayout = await requestValidatedPatternAssignment11WithDependencies({ dependencies: openAiRepairServicesDependencies,
               client,
               theme,
               language,
@@ -5556,7 +5256,7 @@ console.warn("[generate-crossword] ok: pool", {
 
         if (!earlyValidatedLayout) {
           try {
-            earlyValidatedLayout = await requestValidatedGridProposal({
+            earlyValidatedLayout = await requestValidatedGridProposalWithDependencies({ dependencies: openAiRepairServicesDependencies,
               client,
               theme,
               language,
@@ -5574,7 +5274,7 @@ console.warn("[generate-crossword] ok: pool", {
 
         if (!earlyValidatedLayout) {
           try {
-            earlyValidatedLayout = await requestValidatedLayoutProposal({
+            earlyValidatedLayout = await requestValidatedLayoutProposalWithDependencies({ dependencies: openAiRepairServicesDependencies,
               client,
               theme,
               language,
@@ -5628,7 +5328,7 @@ console.warn("[generate-crossword] ok: pool", {
                     : pool.filter((candidate) => candidate.source !== "filler");
 
                 if (compactPool.length < minPublishEntriesForSize(n)) return null;
-                return constructCompactPatternCrossword11({
+                return runLegacyBuilder({ mode: "compact-pattern-11", dependencies: legacyBuilderDependencies,
                   theme,
                   size: n,
                   seed: (seed ^ 0x7f4a7c15 ^ Math.imul(idx + 1, 0x9e3779b9)) >>> 0,
@@ -5643,7 +5343,7 @@ console.warn("[generate-crossword] ok: pool", {
 
       const strictBuilt =
         !cspBuilt && n === 11 && compactBuiltOptions.length === 0 && Date.now() < localBuildDeadlineMs - 1500
-          ? constructStrictCrossword11({
+          ? runLegacyBuilder({ mode: "strict-11", dependencies: legacyBuilderDependencies,
               theme,
               size: n,
               seed,
@@ -5724,7 +5424,7 @@ console.warn("[generate-crossword] ok: pool", {
 
                   if (freeformPool.length < minPublishEntriesForSize(n)) return null;
 
-                  return constructFreeformCrossword({
+                  return runFreeformBuilder({ dependencies: freeformBuilderDependencies,
                     size: n,
                     seed: (seed ^ 0x517cc1b7 ^ Math.imul(idx + 1, 0x85ebca6b)) >>> 0,
                     candidates: freeformPool,
@@ -5741,7 +5441,7 @@ console.warn("[generate-crossword] ok: pool", {
           ? Array.from({ length: 10 }, (_, idx) => idx)
               .map((idx) =>
                 Date.now() < freeformBuildDeadlineMs - 1500
-                  ? constructFreeformCrossword({
+                  ? runFreeformBuilder({ dependencies: freeformBuilderDependencies,
                       size: n,
                       seed: (seed ^ 0x9e3779b9 ^ Math.imul(idx + 1, 0x85ebca6b)) >>> 0,
                       candidates: pool,
@@ -5831,7 +5531,7 @@ console.warn("[generate-crossword] ok: pool", {
                 };
                 return score(b) - score(a);
               })[0] ?? null
-          : constructFreeformCrossword({
+          : runFreeformBuilder({ dependencies: freeformBuilderDependencies,
               size: n,
               seed,
               candidates: pool,
@@ -5857,7 +5557,7 @@ console.warn("[generate-crossword] ok: pool", {
         ) {
           let layoutUpgrade: { grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> } | null = null;
           try {
-            layoutUpgrade = await requestValidatedLayoutProposal({
+            layoutUpgrade = await requestValidatedLayoutProposalWithDependencies({ dependencies: openAiRepairServicesDependencies,
               client,
               theme,
               language,
@@ -5892,7 +5592,7 @@ console.warn("[generate-crossword] ok: pool", {
           if (builtDerivedForLayoutCheck.length < minPublishEntriesForSize(n)) {
             let gridUpgrade: { grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> } | null = null;
             try {
-              gridUpgrade = await requestValidatedGridProposal({
+              gridUpgrade = await requestValidatedGridProposalWithDependencies({ dependencies: openAiRepairServicesDependencies,
                 client,
                 theme,
                 language,
@@ -5935,7 +5635,7 @@ console.warn("[generate-crossword] ok: pool", {
         let layoutProposal: { grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> } | null = null;
         if (allowModelLayoutGridUpgradeFor11) {
           try {
-            layoutProposal = await requestValidatedLayoutProposal({
+            layoutProposal = await requestValidatedLayoutProposalWithDependencies({ dependencies: openAiRepairServicesDependencies,
               client,
               theme,
               language,
@@ -5970,7 +5670,7 @@ console.warn("[generate-crossword] ok: pool", {
           let gridProposal: { grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> } | null = null;
           if (allowModelLayoutGridUpgradeFor11) {
             try {
-              gridProposal = await requestValidatedGridProposal({
+              gridProposal = await requestValidatedGridProposalWithDependencies({ dependencies: openAiRepairServicesDependencies,
                 client,
                 theme,
                 language,
@@ -6012,7 +5712,7 @@ console.warn("[generate-crossword] ok: pool", {
               .filter((candidate) => !isOverGenericThemeWordForTheme(theme, candidate.answer))
               .map((candidate) => candidate.answer)
           );
-          const rescue = await buildThemeFirstRescueCrossword({
+          const rescue = await runThemeFirstRescue({ dependencies: themeFirstRescueDependencies,
             client,
             theme,
             language,
@@ -6136,7 +5836,7 @@ console.warn("[generate-crossword] ok: pool", {
         n === 11 &&
         derived.length >= minPublishEntriesForSize(n) - 6
       ) {
-        const densified = densifyCleanGrid11({
+        const densified = densifyCleanGrid11WithDependencies({ dependencies: gridEnhancementDependencies,
           theme,
           grid: built.grid,
           candidates: pool.filter((candidate) => candidate.source !== "filler"),
@@ -6491,33 +6191,36 @@ console.warn("[generate-crossword] ok: pool", {
       const finalAcceptedDerived = rebuiltPlayableAccepted?.derived ?? safeAcceptedEntriesSource;
 
       const entries = applyCluesAndOverrides(theme, language, finalAcceptedDerived, clueByAnswer);
-      const fullyCheckedAccepted = rebuildFullyCheckedPublishableCrossword(
+      const fullyCheckedAccepted = rebuildFullyCheckedPublishableCrosswordWithPolicies(
         theme,
         n,
         finalAcceptedGrid,
         language,
         n === 11 ? finalAcceptedThematicSet : thematicSet,
         clueByAnswer,
+        gridReconstructionPolicies,
         n === 11 ? minPublishEntriesForSize(n) : 4
       );
       const sanitizedFullyCheckedAccepted =
         n === 11 && !(fullyCheckedAccepted && fullyCheckedAccepted.entries.length >= minPublishEntriesForSize(n))
-          ? rebuildSanitizedFullyCheckedPublishableCrossword(
+          ? rebuildSanitizedFullyCheckedPublishableCrosswordWithPolicies(
             theme,
             n,
             finalAcceptedGrid,
             language,
             finalAcceptedThematicSet,
             clueByAnswer,
+            gridReconstructionPolicies,
             minPublishEntriesForSize(n)
           )
           : null;
-      const exactFullyCheckedAccepted = rebuildExactFullyCheckedPublishableCrossword(
+      const exactFullyCheckedAccepted = rebuildExactFullyCheckedPublishableCrosswordWithPolicies(
         theme,
         n,
         entries,
         language,
         n === 11 ? finalAcceptedThematicSet : thematicSet,
+        gridReconstructionPolicies,
         n === 11 ? minPublishEntriesForSize(n) : 3
       );
       const directAcceptedCheckedStats = checkedCellStats(
@@ -6815,7 +6518,7 @@ console.warn("[generate-crossword] ok: pool", {
 
       {
         const rescue = allowModelRescueFor11
-          ? await buildThemeFirstRescueCrossword({
+          ? await runThemeFirstRescue({ dependencies: themeFirstRescueDependencies,
               client,
               theme,
               language,
@@ -7080,7 +6783,7 @@ console.warn("[generate-crossword] ok: pool", {
             cleanedDerived.length >= minPublishEntriesForSize(n) - 2
               ? { grid: cleanedGrid, derived: cleanedDerived, added: [] as string[], meta: {} as Record<string, unknown> }
               : null;
-          const noPruneDensified = densifyCleanGrid11({
+          const noPruneDensified = densifyCleanGrid11WithDependencies({ dependencies: gridEnhancementDependencies,
               theme,
               grid: cleanedGrid,
               candidates: cleanupPool,
@@ -7095,7 +6798,7 @@ console.warn("[generate-crossword] ok: pool", {
           const pruneDensified =
             noPruneWeakCount === 0 || Date.now() > cleanupDeadlineMs - 2_000
               ? null
-              : densifyCleanGrid11({
+              : densifyCleanGrid11WithDependencies({ dependencies: gridEnhancementDependencies,
                   theme,
                   grid: cleanedGrid,
                   candidates: cleanupPool,
@@ -7276,7 +6979,7 @@ console.warn("[generate-crossword] ok: pool", {
 
         const strictRepacked =
           strictRepackPool.length >= 6
-            ? constructStrictCrossword11({
+            ? runLegacyBuilder({ mode: "strict-11", dependencies: legacyBuilderDependencies,
                 theme,
                 size: n,
                 seed: fallbackStrictSeed,
@@ -7286,7 +6989,7 @@ console.warn("[generate-crossword] ok: pool", {
             : null;
         const broadStrictRepacked =
           !strictRepacked && broadStrictRepackPool.length >= 8
-            ? constructStrictCrossword11({
+            ? runLegacyBuilder({ mode: "strict-11", dependencies: legacyBuilderDependencies,
                 theme,
                 size: n,
                 seed: (fallbackStrictSeed ^ 0x9e3779b9) >>> 0,
@@ -7379,7 +7082,7 @@ console.warn("[generate-crossword] ok: pool", {
 
       const densifiedFallback =
         n === 11 && finalFallbackDerived.length < minPublishEntriesForSize(n)
-          ? densifyCleanGrid11({
+          ? densifyCleanGrid11WithDependencies({ dependencies: gridEnhancementDependencies,
               theme,
               grid: finalFallbackGrid,
               candidates: fallbackPool,
@@ -7764,7 +7467,7 @@ console.warn("[generate-crossword] ok: pool", {
           fastCandidate.entryCrossings.weakEntries.length <= 4 &&
           Date.now() < deadlineMs - 8_000
         ) {
-          const fastRepaired = densifyCleanGrid11({
+          const fastRepaired = densifyCleanGrid11WithDependencies({ dependencies: gridEnhancementDependencies,
             theme,
             grid: fastBaseGridForEntries,
             candidates: fallbackPool,
@@ -7869,130 +7572,142 @@ console.warn("[generate-crossword] ok: pool", {
         n === 11
           ? publishableFallbackAnswerSet
           : publishableFallbackAnswerSet;
-      const fullyCheckedFallback = rebuildFullyCheckedPublishableCrossword(
+      const fullyCheckedFallback = rebuildFullyCheckedPublishableCrosswordWithPolicies(
         theme,
         n,
         finalFallbackGridForResponse,
         language,
         publishableFallbackAnswerSet,
         clueByAnswer,
+        gridReconstructionPolicies,
         n === 11 ? 6 : 4
       );
       const sanitizedFullyCheckedFallback =
         n === 11 && !(fullyCheckedFallback && fullyCheckedFallback.entries.length >= 6)
-          ? rebuildSanitizedFullyCheckedPublishableCrossword(
+          ? rebuildSanitizedFullyCheckedPublishableCrosswordWithPolicies(
               theme,
               n,
               finalFallbackGridForResponse,
               language,
               publishableFallbackAnswerSet,
               clueByAnswer,
+              gridReconstructionPolicies,
               4
             )
           : null;
       const minimalFullyCheckedFallback =
         n === 11 && !(fullyCheckedFallback && fullyCheckedFallback.entries.length >= 6)
-          ? rebuildFullyCheckedPublishableCrossword(
+          ? rebuildFullyCheckedPublishableCrosswordWithPolicies(
               theme,
               n,
               finalFallbackGridForResponse,
               language,
               publishableFallbackAnswerSet,
               clueByAnswer,
+              gridReconstructionPolicies,
               2
             )
           : null;
       const minimalSanitizedFullyCheckedFallback =
         n === 11 &&
         !(sanitizedFullyCheckedFallback && sanitizedFullyCheckedFallback.entries.length >= 4)
-          ? rebuildSanitizedFullyCheckedPublishableCrossword(
+          ? rebuildSanitizedFullyCheckedPublishableCrosswordWithPolicies(
               theme,
               n,
               finalFallbackGridForResponse,
               language,
               publishableFallbackAnswerSet,
               clueByAnswer,
+              gridReconstructionPolicies,
               2
             )
           : null;
-      const playableFallback = rebuildPlayableCrossword(
+      const playableFallback = rebuildPlayableCrosswordWithPolicies(
         theme,
         n,
         entries,
         language,
-        n === 11 ? strongThematicSet : thematicSet
+        n === 11 ? strongThematicSet : thematicSet,
+        gridReconstructionPolicies
       );
-      const exactFullyCheckedFallback = rebuildExactFullyCheckedPublishableCrossword(
+      const exactFullyCheckedFallback = rebuildExactFullyCheckedPublishableCrosswordWithPolicies(
         theme,
         n,
         entries,
         language,
         publishableFallbackAnswerSet,
+        gridReconstructionPolicies,
         n === 11 ? 4 : 3
       );
-      const exactPublishableFallback = rebuildExactPublishableCrossword(
+      const exactPublishableFallback = rebuildExactPublishableCrosswordWithPolicies(
         theme,
         n,
         entries,
         language,
-        publishableFallbackAnswerSet
+        publishableFallbackAnswerSet,
+        gridReconstructionPolicies
       );
       const cluedExactPublishableFallback =
         n === 11 && !exactPublishableFallback
-          ? rebuildExactPublishableCrossword(
+          ? rebuildExactPublishableCrosswordWithPolicies(
               theme,
               n,
               entries,
               language,
               cluedFallbackAnswerSet,
+              gridReconstructionPolicies,
               2
             )
           : null;
       const minimalExactPublishableFallback =
         n === 11 && !exactPublishableFallback && !cluedExactPublishableFallback
-          ? rebuildExactPublishableCrossword(
+          ? rebuildExactPublishableCrosswordWithPolicies(
               theme,
               n,
               entries,
               language,
               publishableFallbackAnswerSet,
+              gridReconstructionPolicies,
               2
             )
           : null;
       const minimalExactFullyCheckedFallback =
         n === 11 &&
         !(exactFullyCheckedFallback && exactFullyCheckedFallback.entries.length >= 4)
-          ? rebuildExactFullyCheckedPublishableCrossword(
+          ? rebuildExactFullyCheckedPublishableCrosswordWithPolicies(
               theme,
               n,
               entries,
               language,
               publishableFallbackAnswerSet,
+              gridReconstructionPolicies,
               2
             )
           : null;
       const broadMinimalExactFullyCheckedFallback =
         n === 11 &&
         !(minimalExactFullyCheckedFallback && minimalExactFullyCheckedFallback.entries.length >= 2)
-          ? rebuildExactFullyCheckedPublishableCrossword(
+          ? rebuildExactFullyCheckedPublishableCrosswordWithPolicies(
               theme,
               n,
               entries,
               language,
               broadPublishableFallbackAnswerSet,
+              gridReconstructionPolicies,
               2
             )
           : null;
       const broadMinimalFullyCheckedFallback =
         n === 11 &&
         !(minimalFullyCheckedFallback && minimalFullyCheckedFallback.entries.length >= 2)
-          ? rebuildFullyCheckedPublishableCrossword(
+          ? rebuildFullyCheckedPublishableCrosswordWithPolicies(
               theme,
               n,
               finalFallbackGridForResponse,
               language,
               broadPublishableFallbackAnswerSet,
               clueByAnswer,
+              gridReconstructionPolicies,
               2
             )
           : null;
@@ -8071,7 +7786,7 @@ console.warn("[generate-crossword] ok: pool", {
 
           for (const seed of strictRepackSeeds) {
             if (Date.now() >= fallbackDeadlineMs - 300) break;
-            const repacked = constructStrictCrossword11({
+            const repacked = runLegacyBuilder({ mode: "strict-11", dependencies: legacyBuilderDependencies,
               theme,
               size: n,
               seed,
@@ -8100,12 +7815,13 @@ console.warn("[generate-crossword] ok: pool", {
             );
             if (repackedAllowedAnswers.size < 2) continue;
 
-            const exactChecked = rebuildExactFullyCheckedPublishableCrossword(
+            const exactChecked = rebuildExactFullyCheckedPublishableCrosswordWithPolicies(
               theme,
               n,
               repackedEntries,
               language,
               repackedAllowedAnswers,
+              gridReconstructionPolicies,
               2
             );
             if (!exactChecked) continue;
@@ -8187,7 +7903,7 @@ console.warn("[generate-crossword] ok: pool", {
         if (finalStrictRescuePool.length >= 6) {
           for (const seed of finalStrictRescueSeeds) {
             if (Date.now() >= fallbackDeadlineMs - 300) break;
-            const repacked = constructStrictCrossword11({
+            const repacked = runLegacyBuilder({ mode: "strict-11", dependencies: legacyBuilderDependencies,
               theme,
               size: n,
               seed,
@@ -8217,21 +7933,23 @@ console.warn("[generate-crossword] ok: pool", {
             if (repackedAllowedAnswers.size < 2) continue;
 
             const exactChecked =
-              rebuildExactFullyCheckedPublishableCrossword(
+              rebuildExactFullyCheckedPublishableCrosswordWithPolicies(
                 theme,
                 n,
                 repackedEntries,
                 language,
                 repackedAllowedAnswers,
+                gridReconstructionPolicies,
                 2
               ) ??
-              rebuildFullyCheckedPublishableCrossword(
+              rebuildFullyCheckedPublishableCrosswordWithPolicies(
                 theme,
                 n,
                 repacked.grid,
                 language,
                 repackedAllowedAnswers,
                 clueByAnswer,
+                gridReconstructionPolicies,
                 2
               );
             if (!exactChecked) continue;
@@ -8318,17 +8036,20 @@ console.warn("[generate-crossword] ok: pool", {
             });
           }
 
-          const augmented = augmentNoShortGridWithCandidates(
+          const augmented = augmentNoShortGridWithCandidatesWithDependencies(
             finalFallbackGridForResponse,
             bestPartial.pool,
             minLenForFallback,
             desiredPublishEntriesForSize(n),
-            minPublishEntriesForSize(n)
-          ) ?? augmentNoShortGridWithCandidates(
+            minPublishEntriesForSize(n),
+            gridEnhancementDependencies
+          ) ?? augmentNoShortGridWithCandidatesWithDependencies(
             finalFallbackGridForResponse,
             bestPartial.pool,
             minLenForFallback,
-            minPublishEntriesForSize(n)
+            minPublishEntriesForSize(n),
+            undefined,
+            gridEnhancementDependencies
           );
           if (augmented) {
             const cleaned = blockForbiddenAnswerRuns(augmented.grid, minLenForFallback);
@@ -8535,12 +8256,13 @@ console.warn("[generate-crossword] ok: pool", {
           const directFallbackAllowedAnswers = new Set(directFallbackFilteredEntries.map((entry) => entry.answer));
           const directFallbackExactFiltered =
             directFallbackNeedsRebuild && directFallbackFilteredEntries.length >= minPublishEntriesForSize(n)
-              ? rebuildExactPublishableCrossword(
+              ? rebuildExactPublishableCrosswordWithPolicies(
                   theme,
                   n,
                   directFallbackFilteredEntries,
                   language,
                   directFallbackAllowedAnswers,
+                  gridReconstructionPolicies,
                   minPublishEntriesForSize(n)
                 )
               : null;
@@ -8625,17 +8347,20 @@ console.warn("[generate-crossword] ok: pool", {
               cleanBaseRebuild?.grid ??
               (directFallbackPreAugmentQualityIssue ? null : directFallbackPublishGrid);
             const augmentedAfterPrune = augmentBaseGrid
-                ? augmentNoShortGridWithCandidates(
+                ? augmentNoShortGridWithCandidatesWithDependencies(
                   augmentBaseGrid,
                   fallbackPool.filter((candidate) => candidate.source !== "filler"),
                   minLenForFallback,
                   desiredPublishEntriesForSize(n),
-                  minPublishEntriesForSize(n)
-                ) ?? augmentNoShortGridWithCandidates(
+                  minPublishEntriesForSize(n),
+                  gridEnhancementDependencies
+                ) ?? augmentNoShortGridWithCandidatesWithDependencies(
                   augmentBaseGrid,
                   fallbackPool.filter((candidate) => candidate.source !== "filler"),
                   minLenForFallback,
-                  minPublishEntriesForSize(n)
+                  minPublishEntriesForSize(n),
+                  undefined,
+                  gridEnhancementDependencies
                 )
               : null;
 
@@ -8780,7 +8505,7 @@ console.warn("[generate-crossword] ok: pool", {
             directFallbackPublishEntries.length < minPublishEntriesForSize(n) ||
             directFallbackPublishEntries.length < desiredPublishEntriesForSize(n) ||
             Boolean(directFallbackFinalQualityBeforeDensify)
-              ? densifyCleanGrid11({
+              ? densifyCleanGrid11WithDependencies({ dependencies: gridEnhancementDependencies,
                   theme,
                   grid: finalDensifierBaseGrid,
                   candidates: fallbackPool,
@@ -8845,12 +8570,13 @@ console.warn("[generate-crossword] ok: pool", {
             directFallbackPublishEntries.length < minPublishEntriesForSize(n) ||
             directFallbackPublishEntries.length < desiredPublishEntriesForSize(n) ||
             Boolean(directFallbackQualityAfterDensify)
-              ? augmentNoShortGridWithCandidates(
+              ? augmentNoShortGridWithCandidatesWithDependencies(
                   directFallbackPublishGrid,
                   fallbackPool.filter((candidate) => candidate.source !== "filler"),
                   minEntryLenForSize(n),
                   desiredPublishEntriesForSize(n),
-                  minPublishEntriesForSize(n)
+                  minPublishEntriesForSize(n),
+                  gridEnhancementDependencies
                 )
               : null;
 
@@ -8961,7 +8687,7 @@ console.warn("[generate-crossword] ok: pool", {
                 minPublishEntriesForSize(n)
               ),
             });
-            const pairExtended = extendGridWithCrossedPair11({
+            const pairExtended = extendGridWithCrossedPair11WithDependencies({ dependencies: gridEnhancementDependencies,
               grid: directFallbackPublishGrid,
               candidates: fallbackPool,
               targetEntries: minPublishEntriesForSize(n),
@@ -9035,7 +8761,7 @@ console.warn("[generate-crossword] ok: pool", {
             );
             if (process.env.OPENAI_PATTERN_REPAIR_11 === "1") {
               try {
-                const patternRepairWords = await generatePatternMatchedRepairWords({
+                const patternRepairWords = await generatePatternMatchedRepairWordsWithDependencies({ dependencies: openAiRepairServicesDependencies,
                   client,
                   theme,
                   language,
@@ -9076,7 +8802,7 @@ console.warn("[generate-crossword] ok: pool", {
               }
             }
 
-            const structuralFreeform = constructFreeformCrossword({
+            const structuralFreeform = runFreeformBuilder({ dependencies: freeformBuilderDependencies,
               size: n,
               seed: (fallbackStrictSeed ^ 0x6a09e667) >>> 0,
               candidates: structuralRescuePool.slice().sort((a, b) => {
@@ -9154,7 +8880,7 @@ console.warn("[generate-crossword] ok: pool", {
               nearCompleteWeak.length <= 3
             ) {
               try {
-                const targetedRepairWords = await generatePatternMatchedRepairWords({
+                const targetedRepairWords = await generatePatternMatchedRepairWordsWithDependencies({ dependencies: openAiRepairServicesDependencies,
                   client,
                   theme,
                   language,
@@ -9220,7 +8946,7 @@ console.warn("[generate-crossword] ok: pool", {
               minEntryLenForSize(n)
             );
             if (structuralDensifyBaseDerived.length >= Math.max(8, directFallbackPublishEntries.length - 5)) {
-              const structuralDensified = densifyCleanGrid11({
+              const structuralDensified = densifyCleanGrid11WithDependencies({ dependencies: gridEnhancementDependencies,
                 theme,
                 grid: structuralDensifyBaseGrid,
                 candidates: structuralRescuePool,
@@ -9345,7 +9071,7 @@ console.warn("[generate-crossword] ok: pool", {
             for (let round = 0; round < 4; round++) {
               if (directFallbackPublishEntries.length >= minPublishEntriesForSize(n)) break;
               const beforeEntries = directFallbackPublishEntries.length;
-              const pairExtended = extendGridWithCrossedPair11({
+              const pairExtended = extendGridWithCrossedPair11WithDependencies({ dependencies: gridEnhancementDependencies,
                 grid: directFallbackPublishGrid,
                 candidates: structuralRescuePool,
                 targetEntries: minPublishEntriesForSize(n),
@@ -9384,21 +9110,21 @@ console.warn("[generate-crossword] ok: pool", {
             const structuralRescueDeadlineMs = boundedFallbackDeadline(14_000);
             const structuralRescueBuilt =
               structuralRescuePool.length >= minPublishEntriesForSize(n)
-                ? constructPatternCrossword11({
+                ? runLegacyBuilder({ mode: "pattern-11", dependencies: legacyBuilderDependencies,
                     theme,
                     size: n,
                     seed: (fallbackStrictSeed ^ 0x3c6ef372) >>> 0,
                     candidates: structuralRescuePool,
                     deadlineMs: structuralRescueDeadlineMs,
                   }) ??
-                  constructCompactPatternCrossword11({
+                  runLegacyBuilder({ mode: "compact-pattern-11", dependencies: legacyBuilderDependencies,
                     theme,
                     size: n,
                     seed: (fallbackStrictSeed ^ 0xa5a5a5a5) >>> 0,
                     candidates: structuralRescuePool,
                     deadlineMs: structuralRescueDeadlineMs,
                   }) ??
-                  constructOpeningCrossword11({
+                  runOpeningBuilder({ dependencies: openingBuilderDependencies,
                     theme,
                     candidates: structuralRescuePool,
                     seed: (fallbackStrictSeed ^ 0xbb67ae85) >>> 0,
@@ -9586,12 +9312,13 @@ console.warn("[generate-crossword] ok: pool", {
             directFallbackPublishEntries.length >= minPublishEntriesForSize(n) - 2 &&
             directFallbackPublishEntries.length < minPublishEntriesForSize(n)
           ) {
-            const oneWordAugment = augmentNoShortGridWithCandidates(
+            const oneWordAugment = augmentNoShortGridWithCandidatesWithDependencies(
               directFallbackPublishGrid,
               fallbackPool,
               minEntryLenForSize(n),
               minPublishEntriesForSize(n),
-              minPublishEntriesForSize(n)
+              minPublishEntriesForSize(n),
+              gridEnhancementDependencies
             );
             if (oneWordAugment) {
               directFallbackPublishGrid = oneWordAugment.grid;
@@ -9879,14 +9606,15 @@ console.warn("[generate-crossword] ok: pool", {
             );
           }
 
-          const noShortRunFallback = rebuildNoShortRunPublishableCrossword(
+          const noShortRunFallback = rebuildNoShortRunPublishableCrosswordWithPolicies(
             theme,
             n,
             directFallbackEntriesCandidate,
             language,
             finalFallbackThematicSet,
             minPublishEntriesForSize(n),
-            9
+            9,
+            gridReconstructionPolicies
           );
 
           if (noShortRunFallback) {
@@ -10009,7 +9737,7 @@ console.warn("[generate-crossword] ok: pool", {
           }
           const lateThemeFirstRescue =
             Date.now() < deadlineMs - 7_000
-              ? await buildThemeFirstRescueCrossword({
+              ? await runThemeFirstRescue({ dependencies: themeFirstRescueDependencies,
                   client,
                   theme,
                   language,
@@ -10059,7 +9787,7 @@ console.warn("[generate-crossword] ok: pool", {
 
           const earlyOpeningFallback =
             n === 11
-              ? constructOpeningCrossword11({
+              ? runOpeningBuilder({ dependencies: openingBuilderDependencies,
                   theme,
                   candidates: Array.from(lateLayoutPoolByAnswer.values()),
                   seed:
@@ -10220,7 +9948,7 @@ console.warn("[generate-crossword] ok: pool", {
             allowModelRescueFor11 &&
             lateLayoutPoolByAnswer.size >= minPublishEntriesForSize(n) &&
             Date.now() < deadlineMs - 8_000
-              ? await requestValidatedLayoutProposal({
+              ? await requestValidatedLayoutProposalWithDependencies({ dependencies: openAiRepairServicesDependencies,
                   client,
                   theme,
                   language,
@@ -10326,7 +10054,7 @@ console.warn("[generate-crossword] ok: pool", {
             allowModelRescueFor11 &&
             lateLayoutPoolByAnswer.size >= minPublishEntriesForSize(n) &&
             Date.now() < deadlineMs - 8_000
-              ? await requestValidatedGridProposal({
+              ? await requestValidatedGridProposalWithDependencies({ dependencies: openAiRepairServicesDependencies,
                   client,
                   theme,
                   language,
@@ -10540,7 +10268,7 @@ console.warn("[generate-crossword] ok: pool", {
 
           const openingFallback =
             n === 11
-              ? constructOpeningCrossword11({
+              ? runOpeningBuilder({ dependencies: openingBuilderDependencies,
                   theme,
                   candidates: fallbackPool,
                   seed: (fallbackStrictSeed ^ 0x7f4a7c15 ^ Math.imul(directFallbackPublishEntries.length + 1, 97)) >>> 0,
@@ -10903,7 +10631,7 @@ console.warn("[generate-crossword] ok: pool", {
           }
 
           if (n === 11 && noShortFallbackEntries.length >= minPublishEntriesForSize(n) - 2) {
-            const lastChanceDensified = densifyCleanGrid11({
+            const lastChanceDensified = densifyCleanGrid11WithDependencies({ dependencies: gridEnhancementDependencies,
               theme,
               grid: noShortFallbackGrid,
               candidates: fallbackPool,
