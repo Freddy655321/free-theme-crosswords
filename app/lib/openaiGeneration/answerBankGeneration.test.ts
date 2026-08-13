@@ -11,6 +11,7 @@ import {
   requestCompactAnswerbankText,
   requestLengthBucketedAnswerbankText,
   topUpAnswers,
+  validateThematicAnswers,
   type OpenAiGenerationCompletion,
   type OpenAiGenerationClient,
 } from "./index";
@@ -86,6 +87,158 @@ test("extractResponseOutputText preserves direct and chunked response extraction
     "one\ntwo\nthree"
   );
   assert.equal(extractResponseOutputText({}), "");
+});
+
+test("validateThematicAnswers preserves exact chat payload and parsed ordering", async () => {
+  const { client, chatRequests } = makeClient(['{"keep":["ALPHA","BETA"]}']);
+  const warnings: unknown[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+  try {
+    const result = await validateThematicAnswers({
+      client,
+      theme: "synthetic theme",
+      language: "en",
+      size: 11,
+      answers: ["ALPHA", "BETA", "GAMMA"],
+      attempt: 3,
+      answerbankSearchModel: "model-a",
+      sanitizeAnswerList: sanitize,
+    });
+
+    assert.deepEqual(result, ["ALPHA", "BETA"]);
+    assert.equal(chatRequests.length, 1);
+    const request = chatRequests[0] as {
+      model: string;
+      temperature: number;
+      max_tokens: number;
+      response_format: unknown;
+      messages: Array<{ role: string; content: string }>;
+    };
+    assert.equal(request.model, "model-a");
+    assert.equal(request.temperature, 0);
+    assert.equal(request.max_tokens, 1400);
+    assert.deepEqual(request.response_format, { type: "json_object" });
+    assert.deepEqual(request.messages[0], {
+      role: "system",
+      content: "Return ONLY valid JSON. No extra text.",
+    });
+    assert.equal(request.messages[1].role, "user");
+    assert.match(request.messages[1].content, /You will OUTPUT ONLY JSON/);
+    assert.match(request.messages[1].content, /THEME: synthetic theme/);
+    assert.match(request.messages[1].content, /LANGUAGE: English/);
+    assert.match(request.messages[1].content, /ANSWERS:\nALPHA, BETA, GAMMA/);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.equal((warnings[0] as unknown[])[0], "[generate-crossword] validate raw");
+});
+
+test("validateThematicAnswers returns empty without a model call for empty answers", async () => {
+  const { client, chatRequests } = makeClient(['{"keep":["ALPHA"]}']);
+  const result = await validateThematicAnswers({
+    client,
+    theme: "synthetic theme",
+    language: "es",
+    size: 11,
+    answers: [],
+    attempt: 1,
+    answerbankSearchModel: "model-a",
+    sanitizeAnswerList: sanitize,
+  });
+
+  assert.deepEqual(result, []);
+  assert.equal(chatRequests.length, 0);
+});
+
+test("validateThematicAnswers preserves invalid JSON and empty response behavior through sanitizer", async () => {
+  const invalid = makeClient(["not json"]);
+  const empty = makeClient([{ choices: [] }]);
+  const warnings: unknown[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+  try {
+    const invalidResult = await validateThematicAnswers({
+      client: invalid.client,
+      theme: "synthetic theme",
+      language: "en",
+      size: 11,
+      answers: ["ALPHA"],
+      attempt: 1,
+      answerbankSearchModel: "model-a",
+      sanitizeAnswerList: sanitize,
+    });
+    const emptyResult = await validateThematicAnswers({
+      client: empty.client,
+      theme: "synthetic theme",
+      language: "en",
+      size: 11,
+      answers: ["ALPHA"],
+      attempt: 2,
+      answerbankSearchModel: "model-a",
+      sanitizeAnswerList: sanitize,
+    });
+
+    assert.deepEqual(invalidResult, []);
+    assert.deepEqual(emptyResult, []);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(invalid.chatRequests.length, 1);
+  assert.equal(empty.chatRequests.length, 1);
+  assert.equal(warnings.length, 2);
+});
+
+test("validateThematicAnswers propagates request and sanitizer errors without retrying", async () => {
+  const chatRequests: unknown[] = [];
+  const client: OpenAiGenerationClient = {
+    chat: {
+      completions: {
+        create: async (args) => {
+          chatRequests.push(args);
+          throw new Error("request failed");
+        },
+      },
+    },
+  };
+
+  await assert.rejects(
+    validateThematicAnswers({
+      client,
+      theme: "synthetic theme",
+      language: "en",
+      size: 11,
+      answers: ["ALPHA"],
+      attempt: 1,
+      answerbankSearchModel: "model-a",
+      sanitizeAnswerList: sanitize,
+    }),
+    /request failed/
+  );
+  assert.equal(chatRequests.length, 1);
+
+  const valid = makeClient(['{"keep":["ALPHA"]}']);
+  await assert.rejects(
+    validateThematicAnswers({
+      client: valid.client,
+      theme: "synthetic theme",
+      language: "en",
+      size: 11,
+      answers: ["ALPHA"],
+      attempt: 1,
+      answerbankSearchModel: "model-a",
+      sanitizeAnswerList: () => {
+        throw new Error("sanitize failed");
+      },
+    }),
+    /sanitize failed/
+  );
+  assert.equal(valid.chatRequests.length, 1);
 });
 
 test("requestAnswerbankText sends the existing chat payload when web search is disabled", async () => {

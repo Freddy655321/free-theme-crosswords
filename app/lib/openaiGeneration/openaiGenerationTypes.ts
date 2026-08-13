@@ -29,6 +29,14 @@ export type OpenAiGenerationClient = RequestAnswerTopUpClient & {
   };
 };
 
+export type OpenAiGenerationChatClient = {
+  chat: {
+    completions: {
+      create: unknown;
+    };
+  };
+};
+
 export type AnswerbankTextResult = {
   text: string;
   model: string;
@@ -122,6 +130,17 @@ export type GenerateSupportWordsInput = {
   language: OpenAiGenerationLanguage;
   size: number;
   existing: string[];
+  attempt: number;
+  answerbankSearchModel: string;
+  sanitizeAnswerList: TopUpSanitizer;
+};
+
+export type ValidateThematicAnswersInput = {
+  client: OpenAiGenerationChatClient;
+  theme: string;
+  language: OpenAiGenerationLanguage;
+  size: number;
+  answers: string[];
   attempt: number;
   answerbankSearchModel: string;
   sanitizeAnswerList: TopUpSanitizer;

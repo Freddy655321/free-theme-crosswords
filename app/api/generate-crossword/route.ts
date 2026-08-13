@@ -44,6 +44,7 @@ import {
   requestCompactAnswerbankText,
   requestLengthBucketedAnswerbankText,
   topUpAnswers,
+  validateThematicAnswers,
   type AnswerbankTextResult,
 } from "@/app/lib/openaiGeneration";
 import {
@@ -2821,94 +2822,6 @@ function sanitizeModelClueText(clue: string, language: "es" | "en"): string {
   return sanitizeModelClueTextFromPublish(clue, language);
 }
 
-async function validateThematicAnswers(opts: {
-  client: OpenAI;
-  theme: string;
-  language: "es" | "en";
-  size: number;
-  answers: string[];
-  attempt: number;
-}) {
-  const { client, theme, language, size, answers, attempt } = opts;
-
-  if (!answers.length) return [];
-
-  const languageLabel = language === "es" ? "Spanish" : "English";
-  const prompt = `
-You will OUTPUT ONLY JSON with this schema:
-{ "keep": string[] }
-
-Task:
-From the provided ANSWERS list, KEEP ONLY entries that are REAL and SPECIFICALLY tied to the THEME.
-For a place/geography theme, also KEEP complete real terms that are strongly characteristic of that place's landscape, tourism, food, flora/fauna, climate, landmarks, routes, or local culture.
-If an entry is only a generic dictionary word with no clear thematic connection, DO NOT keep it.
-
-Hard rules:
-- Keep ONLY uppercase A-Z and digits (no spaces, no hyphens).
-- Length must be 3..${size}.
-- No duplicates.
-- Reject generic/abstract words unless they are a well-known, specific, real themed identifier.
-- KEEP an ordinary domain word when it has a direct, concrete, factual relationship to the theme and can receive
-  a clue that explicitly states that relationship. Examples include an instrument used by a band, a technique used
-  in a craft, an animal characteristic of a habitat, or an activity strongly practiced at a place.
-- Do not keep a contextual word merely because it belongs to the same broad category; the relationship must be
-  specific enough to state in the clue without vague phrases such as "associated with" or "related to".
-- Reject the exact THEME itself; the user's theme text must not become a grid answer.
-- For music, film, book, game, sports, brand, person, and franchise themes, keep exact standalone titles,
-  surnames, stage names, product names, character names, album/song/work titles, roles, teams, places,
-  or other real identifiers even when the word also has a generic dictionary meaning.
-- Keep first names, surnames, stage names, character given names, and short public identifiers when they are
-  commonly used to identify a major person/entity in the requested theme. Do not reject DAVE, MARTY, KIKO,
-  NICK-style entries merely because they are part of a full name, if that name is genuinely prominent for the theme.
-- Keep short complete themed entries when they are genuinely associated with the theme.
-- For place themes, KEEP complete associated terms such as local landmarks, geographic features, activities, foods, flora/fauna, routes, weather terms, and nearby places when they truly fit the requested place.
-- For place themes, KEEP real characteristic category-like terms only when they are strongly associated with the requested place, not merely because they are common dictionary words.
-- Prefer famous/relevant local names over obscure or doubtful names.
-- Prefer widely verifiable, high-salience entries. Reject obscure, one-off, doubtful, or low-source-quality names when a normal solver would not recognize the connection.
-- Keep an entry only if it can receive a concrete clue without unstable words like current/former/latest and without vague wording like "associated with".
-- Reject chopped stems and truncated fragments such as NATUR, CARNI, CULTU, CASC, CUMB, CICL, MONT, NEVE, AVENT.
-- Reject fabricated or doubtful geographic compounds such as LAGOSOL, LAGOBLANCO, LAGOHERMOSO, LAGOLIMPIO, LAGOSILVINA, LAGOTRANCAS, LAGOVIEDMA, CERROVERDE, or CERROAZUL unless the exact full name is a reputable, notable match for the requested THEME.
-- Reject merely generic dictionary words such as BASE, ALMA, AZUL, ARTE, CAMA, CARNES, MUSEO unless the clue would be specifically about the theme.
-- Reject entries that are primarily associated with a different place, state, country, band, person, franchise, or topic than the requested THEME.
-- Reject near-misses, lookalikes, or superficially related entries that are not truly specific to the requested THEME.
-- Reject tokens that are usually only one part of a longer name, title, place, person, or phrase, unless that token is clearly and commonly used as a standalone entry or identifier in the theme.
-- Reject incomplete title variants when the complete title token fits in ${size} cells; for example, do not keep a singular/plural near-miss if the real work title uses the other form.
-- Reject entries whose only possible clue would be vague, such as "related to the theme", "associated with the theme", or "thematic fact".
-- For geography themes, keep only places, landmarks, regions, products, or terms that are genuinely associated with that geography.
-- For geography themes, reject overly broad natural-category words like MOUNTAIN, VALLEY, COAST, PALM, or similar generic feature words unless they are clearly the full standalone name of a specific themed place or entity.
-THEME: ${theme}
-LANGUAGE: ${languageLabel}
-
-ANSWERS:
-${answers.join(", ")}
-
-Return JSON only.
-`;
-
-  const completion = await client.chat.completions.create({
-    model: ANSWERBANK_SEARCH_MODEL,
-    temperature: 0,
-    max_tokens: 1400,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system", content: "Return ONLY valid JSON. No extra text." },
-      { role: "user", content: prompt },
-    ],
-  });
-
-  const text = completion.choices?.[0]?.message?.content ?? "";
-  console.warn("[generate-crossword] validate raw", {
-    attempt,
-    rawText_len: text.length,
-    rawText_head: text.slice(0, 200),
-    rawText_tail: text.slice(-150),
-  });
-
-  const parsed = safeJson<{ keep?: string[] }>(text);
-  const cleaned = sanitizeAnswerList(parsed?.keep, size, language);
-  return cleaned;
-}
-
 async function topUpAnswersRobust(opts: {
   client: OpenAI;
   theme: string;
@@ -3758,7 +3671,12 @@ const openAiRepairServicesDependencies: OpenAiRepairServicesDependencies = {
   isOverGenericThemeWordForTheme,
   noteLooksWeakThematicContext,
   hasStrongThematicClueSupport,
-  validateThematicAnswers,
+  validateThematicAnswers: (opts) =>
+    validateThematicAnswers({
+      ...opts,
+      answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
+      sanitizeAnswerList,
+    }),
   sanitizeModelClueText,
   isBadClue,
   clueMentionsAnswer,
@@ -4785,6 +4703,8 @@ export async function POST(req: NextRequest) {
               size: n,
               answers,
               attempt,
+              answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
+              sanitizeAnswerList,
             }),
           topUpAnswers: ({ existing, need }) =>
             topUpAnswersRobust({
@@ -5062,6 +4982,8 @@ console.warn("[generate-crossword] ok: pool", {
               size,
               answers,
               attempt,
+              answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
+              sanitizeAnswerList,
             }),
         },
       });
@@ -5228,6 +5150,8 @@ console.warn("[generate-crossword] ok: pool", {
                 size: n,
                 answers: contextualAnswers,
                 attempt,
+                answerbankSearchModel: ANSWERBANK_SEARCH_MODEL,
+                sanitizeAnswerList,
               });
               const validatedContextualSet = new Set(validatedContextual);
               if (contextualAnswers.some((answer) => !validatedContextualSet.has(answer))) {
