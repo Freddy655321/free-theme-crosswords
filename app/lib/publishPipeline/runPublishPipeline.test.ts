@@ -7,6 +7,7 @@ import {
   clueMentionsAnswer,
   createRequestModelCluesService,
   deriveEntriesFromGrid,
+  isBadClue,
   isPlaceholderClue,
   pruneForbiddenPublishAnswersIfPossible,
   pruneMaskedDuplicateAnswers,
@@ -15,6 +16,7 @@ import {
   requestModelCluesWithPolicies,
   runPublishPipeline,
   sanitizeModelClueText,
+  clueLooksWeakGeneratedFallback,
   type ClueGenerationClient,
 } from "./index";
 import type { Entry } from "@/app/lib/crosswordTypes";
@@ -163,6 +165,24 @@ test("clue hygiene helpers preserve placeholder, mention, and language rules", (
   assert.equal(clueMentionsAnswer("A strong sea clue", "SEA"), false);
   assert.equal(clueLanguageLooksValid("known hiking lake", "es"), false);
   assert.equal(clueLanguageLooksValid("cerro popular", "en"), false);
+});
+
+test("isBadClue preserves generic and weak generated clue rejection", () => {
+  assert.equal(isBadClue("ok"), true);
+  assert.equal(isBadClue("Thematic entry."), true);
+  assert.equal(isBadClue("Pista tematica."), true);
+  assert.equal(isBadClue("Common crossword fill"), true);
+  assert.equal(isBadClue("Common first name"), true);
+  assert.equal(isBadClue("Nombre comun"), true);
+  assert.equal(isBadClue("Specific thematic answer"), true);
+  assert.equal(isBadClue("Concrete clue for a real entry"), false);
+});
+
+test("clueLooksWeakGeneratedFallback preserves language-specific weak fallback checks", () => {
+  assert.equal(clueLooksWeakGeneratedFallback("Respuesta tematica especifica", "es"), true);
+  assert.equal(clueLooksWeakGeneratedFallback("Reference associated with the topic", "en"), true);
+  assert.equal(clueLooksWeakGeneratedFallback("Concrete landmark by the river", "en"), false);
+  assert.equal(clueLooksWeakGeneratedFallback("Pista concreta del lugar", "es"), false);
 });
 
 test("applyCluesAndOverridesWithPolicies maps clues and falls back when invalid", () => {

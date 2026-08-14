@@ -51,6 +51,8 @@ ITEMS:
 \${itemsJson}
 `;
 
+export const CLUE_MODEL = process.env.OPENAI_CLUE_MODEL ?? "gpt-4o-mini";
+
 export function isPlaceholderClue(clue: string, language: PublishPipelineLanguage): boolean {
   const c = clue.trim().toLowerCase();
   if (!c) return true;
@@ -75,6 +77,78 @@ export function isPlaceholderClue(clue: string, language: PublishPipelineLanguag
     if (/^entrada tematica\b/.test(c) || /^entrada temÃ¡tica\b/.test(c)) return true;
   }
 
+  return false;
+}
+
+export function isGenericThematicClue(clue: string): boolean {
+  const lower = clue.toLowerCase().trim();
+  if (lower === "pista temática." || lower === "pista tematica.") return true;
+  if (lower === "thematic entry." || lower === "thematic entry") return true;
+  if (lower.startsWith("thematic entry related to")) return true;
+  if (lower.startsWith("term related to")) return true;
+  if (lower.startsWith("término relacionado con")) return true;
+  if (lower.includes("related to the theme")) return true;
+  if (lower.includes("relacionado con el tema")) return true;
+  if (lower.startsWith("palabra relacionada con")) return true;
+  if (/^regi[oó]n relacionada con\b/.test(lower)) return true;
+  if (/^referencia (local )?asociada con\b/.test(lower)) return true;
+  if (/^local reference associated with\b/.test(lower)) return true;
+  if (/^concrete reference associated with\b/.test(lower)) return true;
+  return false;
+}
+
+export function clueLooksWeakGeneratedFallback(clue: string, language: PublishPipelineLanguage): boolean {
+  const c = clue
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+  if (language === "es") {
+    return (
+      /^respuesta tematica especifica y verificable\b/.test(c) ||
+      /^respuesta tematica especifica\b/.test(c) ||
+      /^definicion breve\.?$/.test(c) ||
+      /^nombre propio asociado con\b/.test(c) ||
+      /^sitio natural relacionado con\b/.test(c) ||
+      /^lugar asociado con\b/.test(c) ||
+      /^referencia concreta asociada con\b/.test(c) ||
+      /^referencia local documentada en fuentes sobre\b/.test(c) ||
+      /^referencia asociada con\b/.test(c)
+    );
+  }
+
+  return (
+    /^specific,?\s+verifiable\s+themed?\s+answer\b/.test(c) ||
+    /^specific verifiable thematic answer\b/.test(c) ||
+    /^specific thematic answer\b/.test(c) ||
+    /^thematic fact linked to\b/.test(c) ||
+    /^element associated with\b/.test(c) ||
+    /^a term related to\b/.test(c) ||
+    /^[a-z0-9 ]+-related term\b/.test(c) ||
+    /^named thematic item from\b/.test(c) ||
+    /^supporting term for\b/.test(c) ||
+    /^related to [a-z0-9 ]+\.?$/.test(c) ||
+    /^brief definition\.?$/.test(c) ||
+    /^proper name associated with\b/.test(c) ||
+    /^natural site related to\b/.test(c) ||
+    /^place associated with\b/.test(c) ||
+    /^concrete reference associated with\b/.test(c) ||
+    /^documented local reference in sources about\b/.test(c) ||
+    /^reference associated with\b/.test(c)
+  );
+}
+
+export function isBadClue(clue: string): boolean {
+  const c = clue.trim();
+  if (c.length < 3) return true;
+  if (isGenericThematicClue(c)) return true;
+  if (clueLooksWeakGeneratedFallback(c, "es") || clueLooksWeakGeneratedFallback(c, "en")) return true;
+  if (/common crossword fill/i.test(c) || /crossword fill/i.test(c) || /common word/i.test(c)) return true;
+  if (/^common (male|female|given|first) name\b/i.test(c)) return true;
+  if (/^nombre (masculino|femenino|comun|común)\b/i.test(c)) return true;
+  if (/^pista temática/i.test(c)) return true;
+  if (/^pista pendiente/i.test(c)) return true;
   return false;
 }
 
