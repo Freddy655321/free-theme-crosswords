@@ -1,13 +1,27 @@
 import type { Cell, DerivedEntry, Direction, Placement, WordCandidate } from "@/app/lib/crosswordTypes";
+import { ASCII_A_TO_Z, inBounds, makeSeededRng, shuffleInPlace } from "@/app/lib/crosswordUtils";
+import {
+  canPlaceWord,
+  extractPatternSlots,
+  makeEmptyWorkingGrid,
+  placeWordWithPolicies,
+  type PatternSlot,
+} from "../gridConstruction";
+import {
+  checkedCellStats,
+  crosswordDensityFromGrid,
+  desiredPublishEntriesForSize,
+  entryCrossingStats,
+  gridToStrings,
+  hasShortLetterRuns,
+  minCoreThematicEntriesForPublish,
+  minCrossingsPerEntryForPublish,
+  minEntryLenForSize,
+  minPublishEntriesForSize,
+  paintBlocks,
+} from "@/app/lib/gridValidation";
+import { deriveEntriesFromGrid } from "@/app/lib/publishPipeline";
 import type { LegacyBuilderInput, LegacyBuilderResult } from "./legacyBuilderTypes";
-
-type PatternSlot = {
-  row: number;
-  col: number;
-  direction: Direction;
-  len: number;
-  cells: Array<{ r: number; c: number }>;
-};
 
 type LegacyBuilderRunOptions = Omit<LegacyBuilderInput, "mode">;
 
@@ -15,20 +29,13 @@ function constructPatternCrossword11(opts: LegacyBuilderRunOptions): LegacyBuild
   const { theme, size, candidates, seed, deadlineMs, dependencies } = opts;
   const {
     alwaysAllowAnswers: ALWAYS_ALLOW_ANSWERS,
-    asciiAnswerPattern: ASCII_A_TO_Z,
     commonEnglishDictionaryWords: COMMON_ENGLISH_DICTIONARY_WORDS,
-    deriveEntriesFromGrid,
-    extractPatternSlots,
     fillerWords: FILLER_WORDS,
     frequencyEnglishDictionaryWords: FREQUENCY_ENGLISH_DICTIONARY_WORDS,
     frequencySpanishDictionaryWords: FREQUENCY_SPANISH_DICTIONARY_WORDS,
     isLikelyBadAnswer,
     isOverGenericThemeWordForTheme,
-    makeSeededRng,
-    minEntryLenForSize,
-    minPublishEntriesForSize,
     patterns11: PATTERN_11X11S,
-    shuffleInPlace,
     spanishFillerWords: SPANISH_FILLER_WORDS,
     weakContextDictionaryWords: WEAK_CONTEXT_DICTIONARY_WORDS,
   } = dependencies;
@@ -367,19 +374,9 @@ function constructPatternCrossword11(opts: LegacyBuilderRunOptions): LegacyBuild
 function constructCompactPatternCrossword11(opts: LegacyBuilderRunOptions): LegacyBuilderResult | null {
   const { theme, size, candidates, seed, deadlineMs, dependencies } = opts;
   const {
-    asciiAnswerPattern: ASCII_A_TO_Z,
-    deriveEntriesFromGrid,
-    entryCrossingStats,
-    extractPatternSlots,
-    hasShortLetterRuns,
     isForbiddenPublishAnswer,
     isOverGenericThemeWordForTheme,
-    makeSeededRng,
-    minCrossingsPerEntryForPublish,
-    minEntryLenForSize,
-    minPublishEntriesForSize,
     patterns11: PATTERN_11X11S,
-    shuffleInPlace,
   } = dependencies;
   if (size !== 11) return null;
 
@@ -724,25 +721,17 @@ function constructCompactPatternCrossword11(opts: LegacyBuilderRunOptions): Lega
 function constructBeamCrossword11(opts: LegacyBuilderRunOptions): LegacyBuilderResult | null {
   const { theme, size, seed, deadlineMs, dependencies } = opts;
   const {
-    asciiAnswerPattern: ASCII_A_TO_Z,
-    canPlaceWord,
-    crosswordDensityFromGrid,
-    deriveEntriesFromGrid,
-    entryCrossingStats,
-    gridToStrings,
-    hasShortLetterRuns,
     isAcceptable,
     isForbiddenPublishAnswer,
     isOverGenericThemeWordForTheme,
-    makeEmptyWorkingGrid,
-    makeSeededRng,
-    minCoreThematicEntriesForPublish,
-    minEntryLenForSize,
-    minPublishEntriesForSize,
-    paintBlocks,
-    placeWord,
-    shuffleInPlace,
   } = dependencies;
+  const placeWord = (
+    grid: Cell[][],
+    word: string,
+    row: number,
+    col: number,
+    dir: Direction
+  ) => placeWordWithPolicies(grid, word, row, col, dir, { isForbiddenPublishAnswer });
   if (size !== 11) return null;
 
   const minLen = minEntryLenForSize(size);
@@ -994,10 +983,7 @@ function constructBeamCrossword11(opts: LegacyBuilderRunOptions): LegacyBuilderR
 function constructStrictCrossword11(opts: LegacyBuilderRunOptions): LegacyBuilderResult | null {
   const { theme, size, candidates, seed, deadlineMs, dependencies } = opts;
   const {
-    deriveEntriesFromGrid,
     isOverGenericThemeWordForTheme,
-    minEntryLenForSize,
-    minPublishEntriesForSize,
   } = dependencies;
   if (size !== 11) return null;
 
@@ -1125,19 +1111,8 @@ function constructStrictCrossword11(opts: LegacyBuilderRunOptions): LegacyBuilde
 function constructGreedyCheckedCrossword11(opts: LegacyBuilderRunOptions): LegacyBuilderResult | null {
   const { theme, size, seed, deadlineMs, dependencies } = opts;
   const {
-    asciiAnswerPattern: ASCII_A_TO_Z,
-    checkedCellStats,
-    deriveEntriesFromGrid,
-    desiredPublishEntriesForSize,
-    entryCrossingStats,
-    hasShortLetterRuns,
-    inBounds,
     isForbiddenPublishAnswer,
     isOverGenericThemeWordForTheme,
-    makeSeededRng,
-    minEntryLenForSize,
-    minPublishEntriesForSize,
-    shuffleInPlace,
   } = dependencies;
   if (size !== 11) return null;
 

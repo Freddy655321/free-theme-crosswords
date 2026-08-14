@@ -1,6 +1,12 @@
 import type { Cell, Direction, Placement, WordCandidate } from "@/app/lib/crosswordTypes";
 import { ASCII_A_TO_Z, inBounds, makeSeededRng, shuffleInPlace } from "@/app/lib/crosswordUtils";
 import {
+  canPlaceWord,
+  makeEmptyWorkingGrid,
+  placeWordWithPolicies,
+} from "../gridConstruction";
+import { deriveEntriesFromGrid } from "@/app/lib/publishPipeline";
+import {
   checkedCellStats,
   crosswordDensityFromGrid,
   desiredPublishEntriesForSize,
@@ -18,11 +24,15 @@ import type { FreeformBuilderInput, FreeformBuilderResult } from "./freeformBuil
 export function runFreeformBuilder(opts: FreeformBuilderInput): FreeformBuilderResult | null {
   const { size, candidates, seed, dependencies } = opts;
   const {
-    canPlaceWord,
-    deriveEntriesFromGrid,
-    makeEmptyWorkingGrid,
-    placeWord,
+    isForbiddenPublishAnswer,
   } = dependencies;
+  const placeWord = (
+    grid: Cell[][],
+    word: string,
+    row: number,
+    col: number,
+    dir: Direction
+  ) => placeWordWithPolicies(grid, word, row, col, dir, { isForbiddenPublishAnswer });
   console.warn("[freeform] ENTER constructFreeformCrossword", { size, seed, candidates: candidates.length });
 
   const deadline = opts.deadlineMs;

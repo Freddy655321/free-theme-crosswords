@@ -1,4 +1,4 @@
-import type { Cell, DerivedEntry, Direction, WordCandidate } from "@/app/lib/crosswordTypes";
+import type { DerivedEntry, WordCandidate } from "@/app/lib/crosswordTypes";
 
 export type GridEnhancementLogger = {
   warn(message?: unknown, ...optionalParams: unknown[]): void;
@@ -7,13 +7,6 @@ export type GridEnhancementLogger = {
 export type GridEnhancementDependencies = {
   isForbiddenPublishAnswer(answer: string): boolean;
   isOverGenericThemeWordForTheme(theme: string, answer: string): boolean;
-  placeWord(
-    grid: Cell[][],
-    word: string,
-    row: number,
-    col: number,
-    dir: Direction
-  ): Array<{ r: number; c: number; prev: Cell }> | null;
   logger: GridEnhancementLogger;
 };
 

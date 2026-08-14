@@ -1,5 +1,6 @@
 import type { Cell, DerivedEntry, Direction, WordCandidate } from "@/app/lib/crosswordTypes";
 import { ASCII_A_TO_Z, inBounds, makeSeededRng, shuffleInPlace } from "@/app/lib/crosswordUtils";
+import { placeWordWithPolicies } from "../gridConstruction";
 import { deriveEntriesFromGrid } from "@/app/lib/publishPipeline";
 import {
   blockShortRunsOnly,
@@ -311,7 +312,14 @@ export function augmentNoShortGridWithCandidates(
   minimumReturnEntries = targetEntries,
   dependencies: GridEnhancementDependencies
 ): AugmentNoShortGridResult | null {
-  const { isForbiddenPublishAnswer, placeWord } = dependencies;
+  const { isForbiddenPublishAnswer } = dependencies;
+  const placeWord = (
+    workingGrid: Cell[][],
+    word: string,
+    row: number,
+    col: number,
+    dir: Direction
+  ) => placeWordWithPolicies(workingGrid, word, row, col, dir, { isForbiddenPublishAnswer });
   const size = grid.length;
   const candidateAnswers = Array.from(
     new Set(

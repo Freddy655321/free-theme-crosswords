@@ -1,7 +1,6 @@
 import type { DerivedEntry, WordCandidate } from "@/app/lib/crosswordTypes";
 
 export type OpeningBuilderDependencies = {
-  deriveEntriesFromGrid(grid: string[][], minLen?: number): DerivedEntry[];
   isForbiddenPublishAnswer(answer: string): boolean;
   isOverGenericThemeWordForTheme(theme: string, answer: string): boolean;
 };

@@ -1,17 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { WordCandidate } from "@/app/lib/crosswordTypes";
-import { deriveEntriesFromGrid } from "@/app/lib/publishPipeline";
 import { runOpeningBuilder } from "./runOpeningBuilder";
 import type { OpeningBuilderDependencies } from "./openingBuilderTypes";
 
 function dependencies(opts: {
   forbidden?: Set<string>;
   generic?: Set<string>;
-  derived?: OpeningBuilderDependencies["deriveEntriesFromGrid"];
 } = {}): OpeningBuilderDependencies {
   return {
-    deriveEntriesFromGrid: opts.derived ?? deriveEntriesFromGrid,
     isForbiddenPublishAnswer: (answer) => opts.forbidden?.has(answer) ?? false,
     isOverGenericThemeWordForTheme: (_theme, answer) => opts.generic?.has(answer) ?? false,
   };
@@ -152,13 +149,6 @@ describe("openingBuilder", () => {
   });
 
   it("honors thematic ordering, top-28 slicing, and duplicate first-winner semantics", () => {
-    const seenGrids: string[][][] = [];
-    const deps = dependencies({
-      derived: (grid, minLen) => {
-        seenGrids.push(grid.map((row) => row.slice()));
-        return deriveEntriesFromGrid(grid, minLen);
-      },
-    });
     const input = candidates([
       ["ABCDE", false],
       ["ABCDE", true],
@@ -178,10 +168,9 @@ describe("openingBuilder", () => {
       seed: 999,
       targetEntries: 4,
       deadlineMs: Date.now() + 600,
-      dependencies: deps,
+      dependencies: dependencies(),
     });
 
-    assert.ok(seenGrids.length > 0);
     assert.equal(input[0].thematic, false);
     assert.equal(input[1].thematic, true);
   });
@@ -232,22 +221,20 @@ describe("openingBuilder", () => {
     assert.equal(typeof result.meta.density, "number");
   });
 
-  it("returns null when derived entries create answers outside the allowlist", () => {
+  it("does not mutate candidate inputs when no opening is produced", () => {
+    const input = openingCandidates();
+    const before = cloneCandidates(input);
     const result = runOpeningBuilder({
       theme: "Synthetic",
-      candidates: openingCandidates(),
+      candidates: input,
       seed: 7,
-      targetEntries: 5,
-      deadlineMs: Date.now() + 30_000,
-      dependencies: dependencies({
-        derived: (grid, minLen) => [
-          ...deriveEntriesFromGrid(grid, minLen),
-          { number: 99, row: 0, col: 0, direction: "across", answer: "UNLISTED" },
-        ],
-      }),
+      targetEntries: 99,
+      deadlineMs: Date.now() + 600,
+      dependencies: dependencies(),
     });
 
     assert.equal(result, null);
+    assert.deepEqual(input, before);
   });
 
   it("returns null when dependency policies reject all placements", () => {

@@ -8,6 +8,7 @@ import {
   hasShortLetterRuns,
   minEntryLenForSize,
 } from "@/app/lib/gridValidation";
+import { deriveEntriesFromGrid } from "@/app/lib/publishPipeline";
 import type { OpeningBuilderInput, OpeningBuilderResult } from "./openingBuilderTypes";
 
 export function runOpeningBuilder(opts: OpeningBuilderInput): OpeningBuilderResult | null {
@@ -92,7 +93,7 @@ export function runOpeningBuilder(opts: OpeningBuilderInput): OpeningBuilderResu
       grid[r][c] = seedWord[i];
     }
 
-    let derived = dependencies.deriveEntriesFromGrid(grid, minLen);
+    let derived = deriveEntriesFromGrid(grid, minLen);
     const used = new Set<string>([seedWord]);
 
     for (let round = 0; round < 26 && nowOk() && derived.length < opts.targetEntries; round++) {
@@ -126,7 +127,7 @@ export function runOpeningBuilder(opts: OpeningBuilderInput): OpeningBuilderResu
               const written = writeWord(grid, word, row, col, dir);
               if (!written) continue;
               if (hasShortLetterRuns(written.grid, minLen)) continue;
-              const nextDerived = dependencies.deriveEntriesFromGrid(written.grid, minLen);
+              const nextDerived = deriveEntriesFromGrid(written.grid, minLen);
               if (nextDerived.length <= derived.length) continue;
               if (!nextDerived.some((entry) => entry.answer === word)) continue;
               if (nextDerived.some((entry) => !allowedAnswers.has(entry.answer))) continue;
@@ -230,7 +231,7 @@ export function runOpeningBuilder(opts: OpeningBuilderInput): OpeningBuilderResu
                   if (!ok || newAcrossCells < 1 || newDownCells < 1) continue;
                   if (hasShortLetterRuns(next, minLen)) continue;
 
-                  const nextDerived = dependencies.deriveEntriesFromGrid(next, minLen);
+                  const nextDerived = deriveEntriesFromGrid(next, minLen);
                   if (nextDerived.length <= derived.length) continue;
                   if (!nextDerived.some((entry) => entry.answer === acrossWord)) continue;
                   if (!nextDerived.some((entry) => entry.answer === downWord)) continue;

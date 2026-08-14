@@ -1,5 +1,6 @@
 import type { Crossword, DerivedEntry, Direction, WordCandidate } from "@/app/lib/crosswordTypes";
 import { ASCII_A_TO_Z, inBounds, normalizeAnswer, safeJson } from "@/app/lib/crosswordUtils";
+import { extractPatternSlots } from "../gridConstruction";
 import {
   blockShortRunsOnly,
   checkedCellStats,
@@ -230,7 +231,7 @@ export async function requestValidatedLayoutProposal(opts: {
     "###########",
     "###########",
   ];
-  const fixedSlots = deps.extractPatternSlots(fixedPattern);
+  const fixedSlots = extractPatternSlots(fixedPattern);
   const byLength = new Map<number, string[]>();
   for (const answer of allowedAnswers) {
     const list = byLength.get(answer.length) ?? [];
@@ -765,7 +766,7 @@ export async function requestDirectPlayableCrossword11(opts: {
     "###########",
     "###########",
   ];
-  const slots = deps.extractPatternSlots(pattern)
+  const slots = extractPatternSlots(pattern)
     .map(
       (slot, index) =>
         `${index + 1}. ${slot.direction.toUpperCase()} row=${slot.row} col=${slot.col} len=${slot.len}`
@@ -872,7 +873,7 @@ Return only fills. Each fill must include slot, answer, clue, and relation.`,
       continue;
     }
 
-    const slotByNumber = new Map(deps.extractPatternSlots(pattern).map((slot, index) => [index + 1, slot] as const));
+    const slotByNumber = new Map(extractPatternSlots(pattern).map((slot, index) => [index + 1, slot] as const));
     const grid = pattern.map((row) => row.split(""));
     if (hasShortLetterRuns(grid, minLen)) {
       deps.logger.warn("[direct-11] reject", { attempt, tryIndex, reason: "bad-pattern-short-runs" });
@@ -1101,7 +1102,7 @@ export async function requestValidatedPatternAssignment11(opts: {
 
   const viablePatterns = deps.pattern11x11s
     .map((pattern, patternIndex) => {
-      const slots = deps.extractPatternSlots(pattern);
+      const slots = extractPatternSlots(pattern);
       const needByLength = slots.reduce((counts, slot) => {
         counts.set(slot.len, (counts.get(slot.len) ?? 0) + 1);
         return counts;
@@ -1293,7 +1294,7 @@ export async function requestGeneratedPatternGrid11(opts: {
 
   const patternIndex = 0;
   const pattern = deps.pattern11x11s[patternIndex];
-  const slots = deps.extractPatternSlots(pattern);
+  const slots = extractPatternSlots(pattern);
   const rowProperties = Object.fromEntries(
     pattern.map((row, index) => [
       `r${index}`,

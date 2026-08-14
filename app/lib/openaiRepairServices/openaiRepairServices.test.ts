@@ -99,7 +99,6 @@ function deps(warnings: unknown[] = []): OpenAiRepairServicesDependencies {
     ],
     logger: { warn: (...args: unknown[]) => warnings.push(args) },
     errorSummary: (error) => (error instanceof Error ? error.message : String(error)),
-    extractPatternSlots,
     deriveEntriesFromGrid,
     isAcceptable: () => true,
     isForbiddenPublishAnswer: (answer) => answer === "BAN",

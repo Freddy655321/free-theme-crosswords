@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Cell, Direction, WordCandidate } from "@/app/lib/crosswordTypes";
+import type { WordCandidate } from "@/app/lib/crosswordTypes";
 import { deriveEntriesFromGrid } from "@/app/lib/publishPipeline";
 import {
   augmentNoShortGridWithCandidates,
@@ -29,91 +29,6 @@ function withDown(grid: string[][], row: number, col: number, word: string): str
   return next;
 }
 
-function getCell(grid: Cell[][], r: number, c: number): Cell {
-  return grid[r]?.[c] ?? "#";
-}
-
-function inBounds(n: number, r: number, c: number) {
-  return r >= 0 && r < n && c >= 0 && c < n;
-}
-
-function canPlaceWord(
-  grid: Cell[][],
-  word: string,
-  row: number,
-  col: number,
-  dir: Direction
-): boolean {
-  const n = grid.length;
-
-  for (let i = 0; i < word.length; i++) {
-    const r = dir === "across" ? row : row + i;
-    const c = dir === "across" ? col + i : col;
-
-    if (!inBounds(n, r, c)) return false;
-
-    const cur = getCell(grid, r, c);
-    const ch = word[i];
-
-    if (cur === "#") return false;
-    if (cur !== "" && cur !== ch) return false;
-    if (cur === ch) continue;
-
-    if (dir === "across") {
-      const up = inBounds(n, r - 1, c) ? getCell(grid, r - 1, c) : "#";
-      const down = inBounds(n, r + 1, c) ? getCell(grid, r + 1, c) : "#";
-      if (up !== "" && up !== "#") return false;
-      if (down !== "" && down !== "#") return false;
-    } else {
-      const left = inBounds(n, r, c - 1) ? getCell(grid, r, c - 1) : "#";
-      const right = inBounds(n, r, c + 1) ? getCell(grid, r, c + 1) : "#";
-      if (left !== "" && left !== "#") return false;
-      if (right !== "" && right !== "#") return false;
-    }
-  }
-
-  const beforeR = dir === "across" ? row : row - 1;
-  const beforeC = dir === "across" ? col - 1 : col;
-  const afterR = dir === "across" ? row : row + word.length;
-  const afterC = dir === "across" ? col + word.length : col;
-
-  if (inBounds(n, beforeR, beforeC)) {
-    const b = getCell(grid, beforeR, beforeC);
-    if (b !== "" && b !== "#") return false;
-  }
-
-  if (inBounds(n, afterR, afterC)) {
-    const a = getCell(grid, afterR, afterC);
-    if (a !== "" && a !== "#") return false;
-  }
-
-  return true;
-}
-
-function placeWord(
-  grid: Cell[][],
-  word: string,
-  row: number,
-  col: number,
-  dir: Direction
-): Array<{ r: number; c: number; prev: Cell }> | null {
-  if (!canPlaceWord(grid, word, row, col, dir)) return null;
-  const changes: Array<{ r: number; c: number; prev: Cell }> = [];
-
-  for (let i = 0; i < word.length; i++) {
-    const r = dir === "across" ? row : row + i;
-    const c = dir === "across" ? col + i : col;
-    const prev = getCell(grid, r, c);
-    const ch = word[i];
-    if (prev !== ch) {
-      changes.push({ r, c, prev });
-      grid[r][c] = ch;
-    }
-  }
-
-  return changes;
-}
-
 function makeDependencies(forbidden = new Set<string>()): GridEnhancementDependencies & {
   logs: unknown[][];
 } {
@@ -127,7 +42,6 @@ function makeDependencies(forbidden = new Set<string>()): GridEnhancementDepende
       },
     },
     logs,
-    placeWord,
   };
 }
 

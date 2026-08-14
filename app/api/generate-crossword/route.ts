@@ -5,10 +5,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isCsp11Enabled, shouldUseCspDiagnosticOnly } from "@/app/lib/buildCspCrossword11";
 import type {
-  Cell,
   Crossword,
   DerivedEntry,
-  Direction,
   Entry,
   RawAnswerBank,
   RawClueBank,
@@ -18,10 +16,8 @@ import {
   ASCII_A_TO_Z,
   errorSummary,
   inBounds,
-  makeSeededRng,
   normalizeAnswer,
   safeJson,
-  shuffleInPlace,
 } from "@/app/lib/crosswordUtils";
 import {
   cspBankAuditCandidateDistribution,
@@ -86,7 +82,6 @@ import {
   crosswordDensityFromGrid,
   desiredPublishEntriesForSize,
   entryCrossingStats,
-  gridToStrings,
   hasShortLetterRuns,
   isAcceptableGridWithPolicies,
   maxGenericContextEntriesForPublish,
@@ -97,7 +92,6 @@ import {
   minEntryLenForSize,
   minPublishEntriesForSize,
   minThematicEntriesForPublish,
-  paintBlocks,
   pruneWeakEntriesPreservingCrosses,
   sanitizeUncheckedGrid,
 } from "@/app/lib/gridValidation";
@@ -1102,175 +1096,8 @@ function isAcceptable(grid: string[][], derived: Omit<Entry, "clue">[], themeSet
   });
 }
 
-// -------------------- Freeform (Option B) constructor --------------------
-
-function makeEmptyWorkingGrid(n: number): Cell[][] {
-  return Array.from({ length: n }, () => Array.from({ length: n }, () => "" as Cell));
-}
-
-function getCell(grid: Cell[][], r: number, c: number): Cell {
-  return grid[r]?.[c] ?? "#";
-}
-
-function setCell(grid: Cell[][], r: number, c: number, v: Cell) {
-  grid[r][c] = v;
-}
-
-/**
- * IMPORTANT:
- * Prevents "touching" words (adjacent letters without a crossing) which creates merged gibberish
- * entries after paintBlocks(). This is the main fix for the "FANBA / ACKET / GIFANATICI" issue.
- */
-function canPlaceWord(
-  grid: Cell[][],
-  word: string,
-  row: number,
-  col: number,
-  dir: Direction
-): {
-  ok: boolean;
-  crossings: number;
-  reason?:
-    | "out_of_bounds"
-    | "blocked_cell"
-    | "letter_conflict"
-    | "side_touch_up"
-    | "side_touch_down"
-    | "side_touch_left"
-    | "side_touch_right"
-    | "before_cell_occupied"
-    | "after_cell_occupied";
-} {
-  const n = grid.length;
-  let crossings = 0;
-
-  for (let i = 0; i < word.length; i++) {
-    const r = dir === "across" ? row : row + i;
-    const c = dir === "across" ? col + i : col;
-
-    if (!inBounds(n, r, c)) {
-      return { ok: false, crossings: 0, reason: "out_of_bounds" };
-    }
-
-    const cur = getCell(grid, r, c);
-    const ch = word[i];
-
-    if (cur === "#") {
-      return { ok: false, crossings: 0, reason: "blocked_cell" };
-    }
-
-    if (cur !== "" && cur !== ch) {
-      return { ok: false, crossings: 0, reason: "letter_conflict" };
-    }
-
-    if (cur === ch) {
-      crossings++;
-      continue;
-    }
-
-    if (dir === "across") {
-      const up = inBounds(n, r - 1, c) ? getCell(grid, r - 1, c) : "#";
-      const down = inBounds(n, r + 1, c) ? getCell(grid, r + 1, c) : "#";
-
-      if (up !== "" && up !== "#") {
-        return { ok: false, crossings: 0, reason: "side_touch_up" };
-      }
-
-      if (down !== "" && down !== "#") {
-        return { ok: false, crossings: 0, reason: "side_touch_down" };
-      }
-    } else {
-      const left = inBounds(n, r, c - 1) ? getCell(grid, r, c - 1) : "#";
-      const right = inBounds(n, r, c + 1) ? getCell(grid, r, c + 1) : "#";
-
-      if (left !== "" && left !== "#") {
-        return { ok: false, crossings: 0, reason: "side_touch_left" };
-      }
-
-      if (right !== "" && right !== "#") {
-        return { ok: false, crossings: 0, reason: "side_touch_right" };
-      }
-    }
-  }
-
-  const beforeR = dir === "across" ? row : row - 1;
-  const beforeC = dir === "across" ? col - 1 : col;
-  const afterR = dir === "across" ? row : row + word.length;
-  const afterC = dir === "across" ? col + word.length : col;
-
-  if (inBounds(n, beforeR, beforeC)) {
-    const b = getCell(grid, beforeR, beforeC);
-    if (b !== "" && b !== "#") {
-      return { ok: false, crossings: 0, reason: "before_cell_occupied" };
-    }
-  }
-
-  if (inBounds(n, afterR, afterC)) {
-    const a = getCell(grid, afterR, afterC);
-    if (a !== "" && a !== "#") {
-      return { ok: false, crossings: 0, reason: "after_cell_occupied" };
-    }
-  }
-
-  return { ok: true, crossings };
-}
-
-function placeWord(
-  grid: Cell[][],
-  word: string,
-  row: number,
-  col: number,
-  dir: Direction
-): Array<{ r: number; c: number; prev: Cell }> | null {
-  const n = grid.length;
-  const changes: Array<{ r: number; c: number; prev: Cell }> = [];
-
-  // Ensure placement is legal (including anti-touch) before committing.
-  const pre = canPlaceWord(grid, word, row, col, dir);
-  if (!pre.ok) return null;
-
-  for (let i = 0; i < word.length; i++) {
-    const r = dir === "across" ? row : row + i;
-    const c = dir === "across" ? col + i : col;
-    if (!inBounds(n, r, c)) return null;
-
-    const prev = getCell(grid, r, c);
-    if (prev === "#") return null;
-
-    const ch = word[i];
-    if (prev !== "" && prev !== ch) return null;
-
-    if (prev !== ch) {
-      changes.push({ r, c, prev });
-      setCell(grid, r, c, ch);
-    }
-  }
-
-  const painted = gridToStrings(paintBlocks(grid) as (string | null)[][]);
-  if (hasShortLetterRuns(painted, minEntryLenForSize(n))) {
-    for (let i = changes.length - 1; i >= 0; i--) {
-      const change = changes[i];
-      setCell(grid, change.r, change.c, change.prev);
-    }
-    return null;
-  }
-
-  if (deriveEntriesFromGrid(painted, minEntryLenForSize(n)).some((entry) => isForbiddenPublishAnswer(entry.answer))) {
-    for (let i = changes.length - 1; i >= 0; i--) {
-      const change = changes[i];
-      setCell(grid, change.r, change.c, change.prev);
-    }
-    return null;
-  }
-
-  return changes;
-}
-
 const freeformBuilderDependencies: FreeformBuilderDependencies = {
-  canPlaceWord,
-  deriveEntriesFromGrid,
-  makeEmptyWorkingGrid,
-  placeWord,
+  isForbiddenPublishAnswer,
 };
 
 // -------------------- Filler pool (local, deterministic) --------------------
@@ -3422,14 +3249,6 @@ function buildCandidatePoolFromAnswers(
   return pruneMaskedDuplicateCandidates(Array.from(map.values()));
 }
 
-type PatternSlot = {
-  row: number;
-  col: number;
-  direction: Direction;
-  len: number;
-  cells: Array<{ r: number; c: number }>;
-};
-
 const PATTERN_11X11S: string[][] = [
   [
     "##.....####",
@@ -3485,52 +3304,6 @@ const PATTERN_11X11S: string[][] = [
   ],
 ];
 
-function extractPatternSlots(pattern: string[]): PatternSlot[] {
-  const n = pattern.length;
-  const slots: PatternSlot[] = [];
-  const minSlotLen = n === 11 ? 3 : 4;
-
-  for (let r = 0; r < n; r++) {
-    let c = 0;
-    while (c < n) {
-      while (c < n && pattern[r][c] === "#") c++;
-      const start = c;
-      while (c < n && pattern[r][c] !== "#") c++;
-      const len = c - start;
-      if (len >= minSlotLen) {
-        slots.push({
-          row: r,
-          col: start,
-          direction: "across",
-          len,
-          cells: Array.from({ length: len }, (_, i) => ({ r, c: start + i })),
-        });
-      }
-    }
-  }
-
-  for (let c = 0; c < n; c++) {
-    let r = 0;
-    while (r < n) {
-      while (r < n && pattern[r][c] === "#") r++;
-      const start = r;
-      while (r < n && pattern[r][c] !== "#") r++;
-      const len = r - start;
-      if (len >= minSlotLen) {
-        slots.push({
-          row: start,
-          col: c,
-          direction: "down",
-          len,
-          cells: Array.from({ length: len }, (_, i) => ({ r: start + i, c })),
-        });
-      }
-    }
-  }
-
-  return slots;
-}
-
 type ClueRequestItem = PublishClueRequestItem;
 
 const requestModelClues = createRequestModelCluesService({
@@ -3551,35 +3324,15 @@ const requestModelClues = createRequestModelCluesService({
 
 const legacyBuilderDependencies: LegacyBuilderDependencies = {
   alwaysAllowAnswers: ALWAYS_ALLOW_ANSWERS,
-  asciiAnswerPattern: ASCII_A_TO_Z,
-  canPlaceWord,
-  checkedCellStats,
   commonEnglishDictionaryWords: COMMON_ENGLISH_DICTIONARY_WORDS,
-  crosswordDensityFromGrid,
-  deriveEntriesFromGrid,
-  desiredPublishEntriesForSize,
-  entryCrossingStats,
-  extractPatternSlots,
   fillerWords: FILLER_WORDS,
   frequencyEnglishDictionaryWords: FREQUENCY_ENGLISH_DICTIONARY_WORDS,
   frequencySpanishDictionaryWords: FREQUENCY_SPANISH_DICTIONARY_WORDS,
-  gridToStrings,
-  hasShortLetterRuns,
-  inBounds,
   isAcceptable,
   isForbiddenPublishAnswer,
   isLikelyBadAnswer,
   isOverGenericThemeWordForTheme,
-  makeEmptyWorkingGrid,
-  makeSeededRng,
-  minCrossingsPerEntryForPublish,
-  minCoreThematicEntriesForPublish,
-  minEntryLenForSize,
-  minPublishEntriesForSize,
-  paintBlocks: (grid) => paintBlocks(grid as string[][]) as (string | null)[][],
   patterns11: PATTERN_11X11S,
-  placeWord,
-  shuffleInPlace,
   spanishFillerWords: SPANISH_FILLER_WORDS,
   weakContextDictionaryWords: WEAK_CONTEXT_DICTIONARY_WORDS,
 };
@@ -3588,11 +3341,9 @@ const gridEnhancementDependencies: GridEnhancementDependencies = {
   isForbiddenPublishAnswer,
   isOverGenericThemeWordForTheme,
   logger: console,
-  placeWord,
 };
 
 const openingBuilderDependencies: OpeningBuilderDependencies = {
-  deriveEntriesFromGrid,
   isForbiddenPublishAnswer,
   isOverGenericThemeWordForTheme,
 };
@@ -3609,7 +3360,6 @@ const openAiRepairServicesDependencies: OpenAiRepairServicesDependencies = {
   pattern11x11s: PATTERN_11X11S,
   logger: console,
   errorSummary,
-  extractPatternSlots,
   deriveEntriesFromGrid,
   isAcceptable,
   isForbiddenPublishAnswer,

@@ -43,7 +43,6 @@ export interface OpenAiRepairServicesDependencies {
   pattern11x11s: readonly string[][];
   logger: Pick<Console, "warn">;
   errorSummary(error: unknown): string;
-  extractPatternSlots(pattern: string[]): OpenAiRepairPatternSlot[];
   deriveEntriesFromGrid(grid: string[][], minLen?: number): DerivedEntry[];
   isAcceptable(grid: string[][], derived: Omit<Entry, "clue">[], themeSet?: Set<string>): boolean;
   isForbiddenPublishAnswer(answer: string): boolean;

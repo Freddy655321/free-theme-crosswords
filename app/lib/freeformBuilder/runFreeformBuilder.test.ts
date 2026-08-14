@@ -1,191 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { Cell, DerivedEntry, Direction, WordCandidate } from "@/app/lib/crosswordTypes";
-import { inBounds } from "@/app/lib/crosswordUtils";
-import {
-  gridToStrings,
-  hasShortLetterRuns,
-  minEntryLenForSize,
-  paintBlocks,
-} from "@/app/lib/gridValidation";
+import type { WordCandidate } from "@/app/lib/crosswordTypes";
 import { runFreeformBuilder } from "./runFreeformBuilder";
 import type { FreeformBuilderDependencies } from "./freeformBuilderTypes";
 
-function makeEmptyWorkingGrid(n: number): Cell[][] {
-  return Array.from({ length: n }, () => Array.from({ length: n }, () => "" as Cell));
-}
-
-function getCell(grid: Cell[][], r: number, c: number): Cell {
-  return grid[r]?.[c] ?? "#";
-}
-
-function setCell(grid: Cell[][], r: number, c: number, v: Cell) {
-  grid[r][c] = v;
-}
-
-function canPlaceWord(
-  grid: Cell[][],
-  word: string,
-  row: number,
-  col: number,
-  dir: Direction
-) {
-  const n = grid.length;
-  let crossings = 0;
-
-  for (let i = 0; i < word.length; i++) {
-    const r = dir === "across" ? row : row + i;
-    const c = dir === "across" ? col + i : col;
-
-    if (!inBounds(n, r, c)) {
-      return { ok: false, crossings: 0, reason: "out_of_bounds" as const };
-    }
-
-    const cur = getCell(grid, r, c);
-    const ch = word[i];
-
-    if (cur === "#") {
-      return { ok: false, crossings: 0, reason: "blocked_cell" as const };
-    }
-
-    if (cur !== "" && cur !== ch) {
-      return { ok: false, crossings: 0, reason: "letter_conflict" as const };
-    }
-
-    if (cur === ch) {
-      crossings++;
-      continue;
-    }
-
-    if (dir === "across") {
-      const up = inBounds(n, r - 1, c) ? getCell(grid, r - 1, c) : "#";
-      const down = inBounds(n, r + 1, c) ? getCell(grid, r + 1, c) : "#";
-      if (up !== "" && up !== "#") return { ok: false, crossings: 0, reason: "side_touch_up" as const };
-      if (down !== "" && down !== "#") return { ok: false, crossings: 0, reason: "side_touch_down" as const };
-    } else {
-      const left = inBounds(n, r, c - 1) ? getCell(grid, r, c - 1) : "#";
-      const right = inBounds(n, r, c + 1) ? getCell(grid, r, c + 1) : "#";
-      if (left !== "" && left !== "#") return { ok: false, crossings: 0, reason: "side_touch_left" as const };
-      if (right !== "" && right !== "#") return { ok: false, crossings: 0, reason: "side_touch_right" as const };
-    }
-  }
-
-  const beforeR = dir === "across" ? row : row - 1;
-  const beforeC = dir === "across" ? col - 1 : col;
-  const afterR = dir === "across" ? row : row + word.length;
-  const afterC = dir === "across" ? col + word.length : col;
-
-  if (inBounds(n, beforeR, beforeC)) {
-    const b = getCell(grid, beforeR, beforeC);
-    if (b !== "" && b !== "#") return { ok: false, crossings: 0, reason: "before_cell_occupied" as const };
-  }
-
-  if (inBounds(n, afterR, afterC)) {
-    const a = getCell(grid, afterR, afterC);
-    if (a !== "" && a !== "#") return { ok: false, crossings: 0, reason: "after_cell_occupied" as const };
-  }
-
-  return { ok: true, crossings };
-}
-
-function placeWord(
-  grid: Cell[][],
-  word: string,
-  row: number,
-  col: number,
-  dir: Direction
-): Array<{ r: number; c: number; prev: Cell }> | null {
-  const n = grid.length;
-  const changes: Array<{ r: number; c: number; prev: Cell }> = [];
-  const pre = canPlaceWord(grid, word, row, col, dir);
-  if (!pre.ok) return null;
-
-  for (let i = 0; i < word.length; i++) {
-    const r = dir === "across" ? row : row + i;
-    const c = dir === "across" ? col + i : col;
-    if (!inBounds(n, r, c)) return null;
-
-    const prev = getCell(grid, r, c);
-    if (prev === "#") return null;
-
-    const ch = word[i];
-    if (prev !== "" && prev !== ch) return null;
-
-    if (prev !== ch) {
-      changes.push({ r, c, prev });
-      setCell(grid, r, c, ch);
-    }
-  }
-
-  const painted = gridToStrings(paintBlocks(grid) as (string | null)[][]);
-  if (hasShortLetterRuns(painted, minEntryLenForSize(n))) {
-    for (let i = changes.length - 1; i >= 0; i--) {
-      const change = changes[i];
-      setCell(grid, change.r, change.c, change.prev);
-    }
-    return null;
-  }
-
-  return changes;
-}
-
-function deriveEntriesFromGrid(grid: string[][], minLen = 3): DerivedEntry[] {
-  const out: DerivedEntry[] = [];
-  let number = 1;
-  const entryNumber = new Map<string, number>();
-
-  const getNumber = (r: number, c: number) => {
-    const key = `${r},${c}`;
-    const existing = entryNumber.get(key);
-    if (existing) return existing;
-    entryNumber.set(key, number);
-    return number++;
-  };
-
-  for (let r = 0; r < grid.length; r++) {
-    let c = 0;
-    while (c < grid.length) {
-      while (c < grid.length && grid[r][c] === "#") c++;
-      const start = c;
-      while (c < grid.length && grid[r][c] !== "#") c++;
-      if (c - start >= minLen) {
-        out.push({
-          number: getNumber(r, start),
-          row: r,
-          col: start,
-          direction: "across",
-          answer: grid[r].slice(start, c).join(""),
-        });
-      }
-    }
-  }
-
-  for (let c = 0; c < grid.length; c++) {
-    let r = 0;
-    while (r < grid.length) {
-      while (r < grid.length && grid[r][c] === "#") r++;
-      const start = r;
-      while (r < grid.length && grid[r][c] !== "#") r++;
-      if (r - start >= minLen) {
-        out.push({
-          number: getNumber(start, c),
-          row: start,
-          col: c,
-          direction: "down",
-          answer: Array.from({ length: r - start }, (_, i) => grid[start + i][c]).join(""),
-        });
-      }
-    }
-  }
-
-  return out;
-}
-
 const baseDependencies: FreeformBuilderDependencies = {
-  canPlaceWord,
-  deriveEntriesFromGrid,
-  makeEmptyWorkingGrid,
-  placeWord,
+  isForbiddenPublishAnswer: () => false,
 };
 
 const candidates: WordCandidate[] = [
@@ -345,30 +165,24 @@ test("runFreeformBuilder does not mutate candidate input", () => {
   assert.deepEqual(inputCandidates, before);
 });
 
-test("runFreeformBuilder uses injected dependencies", () => {
-  let makeGridCalls = 0;
-  let canPlaceCalls = 0;
+test("runFreeformBuilder uses injected forbidden-answer policy", () => {
+  let forbiddenChecks = 0;
   const result = withMutedWarnings(() => runFreeformBuilder({
     size: 11,
-    candidates,
+    candidates: candidates.slice(0, 3),
     seed: 11,
     maxBuilds: 1,
     dependencies: {
       ...baseDependencies,
-      makeEmptyWorkingGrid: (n) => {
-        makeGridCalls++;
-        return makeEmptyWorkingGrid(n);
-      },
-      canPlaceWord: (...args) => {
-        canPlaceCalls++;
-        return canPlaceWord(...args);
+      isForbiddenPublishAnswer: () => {
+        forbiddenChecks++;
+        return true;
       },
     },
   }));
 
   assert.equal(result, null);
-  assert.ok(makeGridCalls > 0);
-  assert.ok(canPlaceCalls > 0);
+  assert.ok(forbiddenChecks > 0);
 });
 
 test("runFreeformBuilder reports null when no crossings can be committed", () => {
