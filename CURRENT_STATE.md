@@ -3,13 +3,14 @@
 ## Snapshot
 
 - Branch: `main`
-- HEAD: `fd5bb8c Define durable product contract`
-- Relation to `origin/main`: `main` is ahead by 35 commits.
+- HEAD: `66d58b1 Align current state with product contract`
+- Relation to `origin/main`: `main` is ahead by 36 commits.
 - Tracked working tree: clean.
 - Canonical docs currently present and tracked:
   - `PROJECT.md`
   - `AGENTS.md`
   - `ARCHITECTURE.md`
+  - `CURRENT_STATE.md`
 
 The ahead-of-origin count is Git state only. It is not an application-health or
 deployment-health claim.
@@ -27,6 +28,15 @@ The primary generation flow currently uses a fixed 11x11 generation size
 internally. Grid size is not a current user-configurable product input.
 
 The modular generation architecture is documented in `ARCHITECTURE.md`.
+
+PRODUCT-OWNER-VERIFIED HISTORY: the generator has not yet demonstrated
+acceptable, genuinely general arbitrary-theme crossword generation. Historically
+moderately acceptable outputs depended on practice themes with
+theme-specific repositories, fixtures, or material; genuinely unseen themes did
+not produce acceptable results.
+
+UNVERIFIED CURRENT RUNTIME: runtime quality after the Theme Independence /
+Fixture Contamination cleanup has not been re-evaluated.
 
 `PROJECT.md` now defines additional durable business and product requirements.
 Their implementation status was not verified during this documentation
@@ -46,12 +56,17 @@ Important current commits:
 - `47a2cdc Document current architecture`
 - `794cf68 Document current project state`
 - `fd5bb8c Define durable product contract`
+- `66d58b1 Align current state with product contract`
 
 The canonical documentation foundation currently consists of `PROJECT.md`,
 `AGENTS.md`, `ARCHITECTURE.md`, and `CURRENT_STATE.md`.
 
 `fd5bb8c` is documentation and product-contract work. It is not evidence that
 the newly documented business requirements are implemented.
+
+The Theme Independence / Fixture Contamination cleanup removed a known source
+of fixture contamination, but it does not itself establish acceptable
+arbitrary-theme generation quality.
 
 ## Validation Status
 
@@ -70,6 +85,7 @@ The commits after that validation were documentation-only:
 - `47a2cdc Document current architecture`
 - `794cf68 Document current project state`
 - `fd5bb8c Define durable product contract`
+- `66d58b1 Align current state with product contract`
 
 These checks do not establish repository-wide lint status, runtime generation
 quality, generation benchmark results, or external-service runtime behavior.
@@ -85,6 +101,30 @@ quality, generation benchmark results, or external-service runtime behavior.
 
 Temporary implementation facts should not be treated as permanent product
 decisions unless recorded as durable decisions.
+
+## Core Generator Maturity
+
+Product goal: acceptable playable crosswords for arbitrary user-selected themes.
+
+Known historical product status: NOT YET ACHIEVED.
+
+PRODUCT-OWNER-VERIFIED HISTORY: moderately acceptable results historically
+depended on practice-theme-specific repositories, fixtures, or material.
+Genuinely unseen themes did not produce acceptable results, so those historical
+results did not establish arbitrary-theme generalization.
+
+UNVERIFIED CURRENT RUNTIME: runtime quality after the current cleanup has not
+been re-evaluated.
+
+Development status: substantial generator-quality work remains before the core
+product goal is achieved.
+
+Future generator work is authorized at the product-outcome level: improving the
+genuinely generic generator. This does not automatically authorize any specific
+technical remedy, including further route modularization,
+`prepareAttemptAnswers` extraction, `legacyBuilder` removal,
+`getDemoCrossword` removal, multi-size cleanup, additional clue/answer
+extraction, or any other historical refactor.
 
 ## Product Contract / Implementation Gap
 
@@ -185,8 +225,9 @@ They have not been reconciled, deleted, adopted, or classified as canonical.
 
 ## Unverified
 
-- Runtime generation quality has not been revalidated during this documentation
-  reorganization.
+- Runtime generation quality after the fixture-contamination cleanup remains
+  UNVERIFIED; this is distinct from the product-owner-verified history that
+  acceptable arbitrary-theme generalization has not yet been demonstrated.
 - External-service behavior has not been exercised during this documentation
   reorganization.
 - Product-contract implementation gaps are recorded as UNVERIFIED.
@@ -204,3 +245,6 @@ They have not been reconciled, deleted, adopted, or classified as canonical.
 6. Verify Git status and HEAD before modifying anything.
 7. Do not resume work from historical audit files unless current canonical state
    explicitly authorizes it.
+8. When core-generator development resumes, start from the product outcome in
+   `PROJECT.md` and the generator-maturity status here, not from an old
+   refactoring agenda by default.
