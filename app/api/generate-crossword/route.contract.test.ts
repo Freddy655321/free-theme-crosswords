@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 process.env.SUPABASE_URL = process.env.SUPABASE_URL ?? "https://example.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY =
@@ -329,6 +330,25 @@ function assertEntriesMatchGrid(json: ContractResponse) {
   }
 }
 
+function functionSource(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}`);
+  assert.notEqual(start, -1, `missing ${name}`);
+  const braceCandidates = [source.indexOf("{\r\n", start), source.indexOf("{\n", start)].filter(
+    (index) => index >= 0
+  );
+  const brace = Math.min(...braceCandidates);
+  assert.notEqual(brace, Infinity, `missing body for ${name}`);
+  let depth = 0;
+  for (let index = brace; index < source.length; index++) {
+    if (source[index] === "{") depth++;
+    if (source[index] === "}") {
+      depth--;
+      if (depth === 0) return source.slice(start, index + 1);
+    }
+  }
+  throw new Error(`unterminated ${name}`);
+}
+
 test("request normalization without OpenAI API key preserves current error envelope", async () => {
   await withRouteTest({}, async (route) => {
     const cases = [
@@ -336,8 +356,8 @@ test("request normalization without OpenAI API key preserves current error envel
       { body: { theme: "ocean science", language: "fr", size: 11 }, theme: "ocean science", language: "es" },
       { body: { theme: "ocean science", language: "en" }, theme: "ocean science", language: "en" },
       { body: { theme: "ocean science", language: "en", size: 15 }, theme: "ocean science", language: "en" },
-      { body: { language: "en", size: 11 }, theme: "Argentina", language: "en" },
-      { body: "{", theme: "Argentina", language: "es" },
+      { body: { language: "en", size: 11 }, theme: "general knowledge", language: "en" },
+      { body: "{", theme: "general knowledge", language: "es" },
     ] as const;
 
     for (const item of cases) {
@@ -349,6 +369,65 @@ test("request normalization without OpenAI API key preserves current error envel
       assert.equal(json.meta?.reason, "OPENAI_API_KEY no configurada.");
     }
   });
+});
+
+test("route-local theme policies do not branch on historical fixture identities", () => {
+  const source = readFileSync("app/api/generate-crossword/route.ts", "utf8");
+  const policySource = [
+    "specificThematicFallbackClue",
+    "clueFromThemeNote",
+    "fallbackClueForPublishRepair",
+    "clueLooksOffTheme",
+    "isOverGenericThemeWordForTheme",
+    "inferLocalSupportWords",
+  ]
+    .map((name) => functionSource(source, name))
+    .join("\n");
+
+  assert.doesNotMatch(
+    policySource,
+    /MEGADETH|METALLICA|BARILOCHE|MENDOZA|ARGENTINA|JAPAN|JAPON|WINE|VINO|FOOD/i
+  );
+  assert.doesNotMatch(policySource, /themeNorm\s*===|t\s*===/);
+});
+
+test("fixture and unseen themes follow the same mocked direct-model stage sequence", async () => {
+  const themes = ["Megadeth", "Medieval bridge engineering"];
+  const observed: Array<{ theme: string; status: number; stages: MockStage[] }> = [];
+
+  for (const theme of themes) {
+    await withRouteTest(
+      {
+        OPENAI_API_KEY: "test-key",
+        ENABLE_DIRECT_MODEL_11: "1",
+        CROSSWORD_CSP_11_ENABLED: "false",
+      },
+      async (route) => {
+        const mock = createMockOpenAI({
+          "direct-grid": directGridJson(),
+          "thematic-validation": thematicKeepJson(DIRECT_ANSWERS),
+          clues: cluesJson(DIRECT_ANSWERS),
+        });
+        const restore = installOpenAIMock(route, mock);
+        try {
+          const response = await route.POST(
+            makeRequest({ theme, language: "en", size: 11 }) as Parameters<typeof route.POST>[0]
+          );
+          observed.push({
+            theme,
+            status: response.status,
+            stages: mock.calls.map((call) => call.stage),
+          });
+        } finally {
+          restore();
+        }
+      }
+    );
+  }
+
+  assert.equal(observed.length, 2);
+  assert.deepEqual(observed[0].stages, observed[1].stages);
+  assert.equal(observed[0].status, observed[1].status);
 });
 
 test("missing API key does not construct an OpenAI client and Supabase smoke failures are non-fatal", async () => {
