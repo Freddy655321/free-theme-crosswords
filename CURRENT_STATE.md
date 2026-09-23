@@ -3,8 +3,8 @@
 ## Snapshot
 
 - Branch: `main`
-- HEAD: `47a2cdc Document current architecture`
-- Relation to `origin/main`: `main` is ahead by 33 commits.
+- HEAD: `fd5bb8c Define durable product contract`
+- Relation to `origin/main`: `main` is ahead by 35 commits.
 - Tracked working tree: clean.
 - Canonical docs currently present and tracked:
   - `PROJECT.md`
@@ -28,6 +28,10 @@ internally. Grid size is not a current user-configurable product input.
 
 The modular generation architecture is documented in `ARCHITECTURE.md`.
 
+`PROJECT.md` now defines additional durable business and product requirements.
+Their implementation status was not verified during this documentation
+reorganization.
+
 ## Completed / Verified Frontier
 
 The current implementation frontier includes the completed generation-pipeline
@@ -40,9 +44,14 @@ Important current commits:
 - `3bd7c79 Remove route fixture contamination`
 - `93f1e67 Establish canonical project foundation`
 - `47a2cdc Document current architecture`
+- `794cf68 Document current project state`
+- `fd5bb8c Define durable product contract`
 
 The canonical documentation foundation currently consists of `PROJECT.md`,
-`AGENTS.md`, and `ARCHITECTURE.md`.
+`AGENTS.md`, `ARCHITECTURE.md`, and `CURRENT_STATE.md`.
+
+`fd5bb8c` is documentation and product-contract work. It is not evidence that
+the newly documented business requirements are implemented.
 
 ## Validation Status
 
@@ -59,16 +68,11 @@ The commits after that validation were documentation-only:
 
 - `93f1e67 Establish canonical project foundation`
 - `47a2cdc Document current architecture`
+- `794cf68 Document current project state`
+- `fd5bb8c Define durable product contract`
 
-These checks do not establish repository-wide lint status unless explicitly run.
-
-These checks do not establish runtime generation quality.
-
-Generation benchmarks were not run as part of this documentation
-reorganization.
-
-External-service runtime behavior was not validated as part of this
-documentation reorganization.
+These checks do not establish repository-wide lint status, runtime generation
+quality, generation benchmark results, or external-service runtime behavior.
 
 ## Known Current Boundaries
 
@@ -81,6 +85,24 @@ documentation reorganization.
 
 Temporary implementation facts should not be treated as permanent product
 decisions unless recorded as durable decisions.
+
+## Product Contract / Implementation Gap
+
+`PROJECT.md` is authoritative for the durable product contract. The statuses
+below were not investigated during this reorganization.
+
+| Verified product requirement | Current implementation status |
+| --- | --- |
+| US$9.99/month subscription | UNVERIFIED |
+| One crossword generation per day | UNVERIFIED |
+| Generation economics ceiling | UNVERIFIED |
+| Generated-crossword storage | UNVERIFIED |
+| Same-theme-name + same-language reuse | UNVERIFIED |
+
+UNVERIFIED does not mean definitely absent, broken, unfinished, or authorized next work.
+
+`ROADMAP.md`, if created, will determine which verified product gaps become
+authorized future work.
 
 ## Unfinished / Unresolved
 
@@ -100,8 +122,8 @@ still receives it as a prepared-attempt service.
 
 Future-work status: UNVERIFIED / REQUIRES REASSESSMENT
 
-Current classification: route-bound composition remains present in the current
-architecture. Whether it should be extracted or changed is not established here.
+Current classification: route-bound composition remains present. Whether it
+should be extracted or changed is not established here.
 
 ### Further separation of generic clue/answer mechanisms
 
@@ -113,9 +135,8 @@ Evidence: current source contains modular owners such as
 
 Future-work status: UNVERIFIED / REQUIRES REASSESSMENT
 
-Current classification: no deep reassessment was performed while creating this
-handoff, so no unfinished extraction claim or current need for further
-separation is made here.
+Current classification: no deep reassessment was performed, so no unfinished
+extraction claim or current need for further separation is made here.
 
 ### Explicitly legacy, demo, or dead residue
 
@@ -141,8 +162,7 @@ support code.
 Future-work status: UNVERIFIED / REQUIRES REASSESSMENT
 
 Current classification: historical size-related implementation residue is
-present. Whether it should be removed, retained, or simplified was not
-reassessed here.
+present. Whether it should be removed, retained, or simplified was not reassessed here.
 
 ## Local / Non-Canonical Material
 
@@ -169,6 +189,7 @@ They have not been reconciled, deleted, adopted, or classified as canonical.
   reorganization.
 - External-service behavior has not been exercised during this documentation
   reorganization.
+- Product-contract implementation gaps are recorded as UNVERIFIED.
 - Historical unresolved items have not all been reassessed against current code.
 - Untracked local material has not been reconciled.
 - No deployment state is verified by this file.
