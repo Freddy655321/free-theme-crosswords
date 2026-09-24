@@ -3,7 +3,7 @@
 ## Snapshot
 
 - Branch: `main`
-- Current checkpoint: `Upgrade Next.js security patch`
+- Current checkpoint: `Record successful production deployment`
 - Relation to `origin/main`: synchronized after the checkpoint commit is pushed.
 - Tracked working tree: clean.
 - Canonical docs currently present and tracked:
@@ -68,6 +68,7 @@ Important current commits:
 - `fcd6590 Ignore local generated artifacts`
 - `Fix optional Supabase build dependency` checkpoint
 - `Upgrade Next.js security patch` checkpoint
+- `Record successful production deployment` checkpoint
 
 The canonical documentation foundation currently consists of `PROJECT.md`,
 `AGENTS.md`, `ARCHITECTURE.md`, `CURRENT_STATE.md`, and `ROADMAP.md`.
@@ -94,6 +95,16 @@ update immediately.`
 The Next.js security checkpoint upgrades the dependency state from Next.js
 `15.5.4` to `15.5.26` and `eslint-config-next` from `15.5.4` to `15.5.26`.
 React and React DOM remain `19.1.0`.
+
+Vercel production evidence for
+`3d2987f0a8e84663d4eacc9ece4130c41a03eac4 Upgrade Next.js security patch`
+confirmed deployment status `Ready`, environment `Production`, production
+designation `Current`, source branch `main`, source commit `3d2987f`, and
+deployment duration `1m 18s`. Build Logs and Deployment Summary completed
+successfully, and production domains were assigned.
+
+The Supabase build-time incident is CLOSED. The vulnerable-Next.js deployment
+rejection is CLOSED. The deployment incident that paused Milestone 1 is CLOSED.
 
 ## Validation Status
 
@@ -145,7 +156,8 @@ For the Next.js `15.5.26` security checkpoint:
 The npm install for the Next.js checkpoint reported 18 vulnerabilities
 (`1 low`, `5 moderate`, `11 high`, `1 critical`). That audit summary is an
 out-of-scope dependency-security observation for this checkpoint unless
-separately investigated.
+separately investigated. These findings have not yet been diagnosed and are not
+documented here as confirmed exploitable production vulnerabilities.
 
 The build also emitted stale `baseline-browser-mapping` and
 Browserslist/caniuse-lite warnings. Those warnings did not block the local
@@ -284,10 +296,8 @@ No untracked local material is part of the canonical state.
   reorganization.
 - Product-contract implementation gaps are recorded as UNVERIFIED.
 - Historical unresolved items have not all been reassessed against current code.
-- Vercel production acceptance of the Next.js `15.5.26` checkpoint is
-  UNVERIFIED until the new commit is pushed and the actual Vercel deployment
-  completes.
-- Milestone 1 remains paused until the deployment incident is closed.
+- The separate npm vulnerability review remains pending before Milestone 1
+  resumes.
 
 ## Resume Protocol
 
