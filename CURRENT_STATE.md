@@ -3,7 +3,7 @@
 ## Snapshot
 
 - Branch: `main`
-- Current checkpoint: `Fix optional Supabase build dependency`
+- Current checkpoint: `Upgrade Next.js security patch`
 - Relation to `origin/main`: synchronized after the checkpoint commit is pushed.
 - Tracked working tree: clean.
 - Canonical docs currently present and tracked:
@@ -67,6 +67,7 @@ Important current commits:
 - `b4469fe Establish product roadmap`
 - `fcd6590 Ignore local generated artifacts`
 - `Fix optional Supabase build dependency` checkpoint
+- `Upgrade Next.js security patch` checkpoint
 
 The canonical documentation foundation currently consists of `PROJECT.md`,
 `AGENTS.md`, `ARCHITECTURE.md`, `CURRENT_STATE.md`, and `ROADMAP.md`.
@@ -82,6 +83,17 @@ The Supabase deployment/build fix makes the generation route's optional
 Supabase smoke-client acquisition lazy and non-fatal. Missing Supabase
 configuration no longer causes the verified `Collecting page data` build
 failure for `/api/generate-crossword`.
+
+Vercel production evidence for
+`50e72fdd398375d737f4d6711421140f8d21ccb9 Fix optional Supabase build dependency`
+confirmed that compilation, page-data collection, static generation, and build
+output completion succeeded. That deployment then failed for a separate
+dependency security gate: `Vulnerable version of Next.js detected, please
+update immediately.`
+
+The Next.js security checkpoint upgrades the dependency state from Next.js
+`15.5.4` to `15.5.26` and `eslint-config-next` from `15.5.4` to `15.5.26`.
+React and React DOM remain `19.1.0`.
 
 ## Validation Status
 
@@ -117,6 +129,27 @@ For the Supabase deployment/build fix checkpoint:
 - `npx.cmd tsc --noEmit` - PASS
 - production build with `SUPABASE_URL=''` and
   `SUPABASE_SERVICE_ROLE_KEY=''` - PASS
+
+For the Next.js `15.5.26` security checkpoint:
+
+- `npm.cmd run test:contract` - PASS - 12/12
+- relevant ESLint - PASS - for:
+  - `app/api/generate-crossword/route.ts`
+  - `app/api/generate-crossword/route.contract.test.ts`
+- `npx.cmd tsc --noEmit` - PASS
+- `npm.cmd run build` - PASS - detected Next.js `15.5.26`, compiled,
+  collected page data, generated static pages `12/12`, and completed the
+  production build
+- `git diff --check` - PASS, with harmless line-ending warnings only
+
+The npm install for the Next.js checkpoint reported 18 vulnerabilities
+(`1 low`, `5 moderate`, `11 high`, `1 critical`). That audit summary is an
+out-of-scope dependency-security observation for this checkpoint unless
+separately investigated.
+
+The build also emitted stale `baseline-browser-mapping` and
+Browserslist/caniuse-lite warnings. Those warnings did not block the local
+production build and are not active product-development work here.
 
 ## Known Current Boundaries
 
@@ -251,8 +284,10 @@ No untracked local material is part of the canonical state.
   reorganization.
 - Product-contract implementation gaps are recorded as UNVERIFIED.
 - Historical unresolved items have not all been reassessed against current code.
-- Vercel production deployment of the Supabase build fix is not verified by
-  this file unless confirmed separately after push.
+- Vercel production acceptance of the Next.js `15.5.26` checkpoint is
+  UNVERIFIED until the new commit is pushed and the actual Vercel deployment
+  completes.
+- Milestone 1 remains paused until the deployment incident is closed.
 
 ## Resume Protocol
 
