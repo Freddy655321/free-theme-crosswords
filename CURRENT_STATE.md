@@ -3,7 +3,7 @@
 ## Snapshot
 
 - Branch: `main`
-- Current checkpoint: `Record successful production deployment`
+- Current checkpoint: `Record dependency security review`
 - Relation to `origin/main`: synchronized after the checkpoint commit is pushed.
 - Tracked working tree: clean.
 - Canonical docs currently present and tracked:
@@ -69,6 +69,8 @@ Important current commits:
 - `Fix optional Supabase build dependency` checkpoint
 - `Upgrade Next.js security patch` checkpoint
 - `Record successful production deployment` checkpoint
+- `95e6b4b Apply non-breaking dependency security updates`
+- `Record dependency security review` checkpoint
 
 The canonical documentation foundation currently consists of `PROJECT.md`,
 `AGENTS.md`, `ARCHITECTURE.md`, `CURRENT_STATE.md`, and `ROADMAP.md`.
@@ -105,6 +107,29 @@ successfully, and production domains were assigned.
 
 The Supabase build-time incident is CLOSED. The vulnerable-Next.js deployment
 rejection is CLOSED. The deployment incident that paused Milestone 1 is CLOSED.
+
+The non-breaking npm security remediation is COMPLETE. The user ran
+`npm.cmd audit fix` without `--force`, and the resulting compatible remediation
+was checkpointed as
+`95e6b4b4d1810119c013b815af08a46b7f648023 Apply non-breaking dependency security updates`.
+It changed only `package-lock.json`; direct dependency declarations did not
+change. Next remains `15.5.26`, `eslint-config-next` remains `15.5.26`, React
+and React DOM remain `19.1.0`, and no Next 16 migration was performed.
+
+The current npm audit state has 2 remaining records: `1 moderate` and `1 high`.
+Both records correspond to the same dependency chain:
+`next@15.5.26` -> nested `postcss@8.4.31` -> PostCSS advisories. The top-level
+PostCSS used by development tooling was updated to `8.5.28`.
+
+The remaining Next/PostCSS chain is a known, monitored dependency-maintenance
+item. `npm audit fix --force`, a Next 16 migration, package overrides, and
+manual changes to Next internals are not part of the current remediation. Current
+repository evidence did not establish application-level exposure through
+attacker-controlled CSS or source-map processing; that is an exposure
+observation, not proof of immunity.
+
+The security-maintenance work no longer blocks Milestone 1. Milestone 1 may
+resume, but it has not resumed yet.
 
 ## Validation Status
 
@@ -153,11 +178,25 @@ For the Next.js `15.5.26` security checkpoint:
   production build
 - `git diff --check` - PASS, with harmless line-ending warnings only
 
-The npm install for the Next.js checkpoint reported 18 vulnerabilities
-(`1 low`, `5 moderate`, `11 high`, `1 critical`). That audit summary is an
-out-of-scope dependency-security observation for this checkpoint unless
-separately investigated. These findings have not yet been diagnosed and are not
-documented here as confirmed exploitable production vulnerabilities.
+The initial npm audit after the Next.js checkpoint reported 18 vulnerabilities:
+`1 low`, `5 moderate`, `11 high`, and `1 critical`.
+
+The compatible npm security remediation passed:
+
+- `npm.cmd run test:contract` - PASS - 12/12
+- relevant ESLint - PASS - for:
+  - `app/api/generate-crossword/route.ts`
+  - `app/api/generate-crossword/route.contract.test.ts`
+- `npx.cmd tsc --noEmit` - PASS
+- `npm.cmd run build` - PASS - detected Next.js `15.5.26`, compiled,
+  collected page data, generated static pages `12/12`, and completed the
+  production build
+- `git diff --check` - PASS, with harmless line-ending warnings only
+
+After that remediation, the current npm audit state is 2 records: `1 moderate`
+and `1 high`, both representing the same Next-owned nested PostCSS chain. The
+remaining chain has not been documented here as a confirmed exploitable
+Wordynamo application vulnerability.
 
 The build also emitted stale `baseline-browser-mapping` and
 Browserslist/caniuse-lite warnings. Those warnings did not block the local
@@ -296,8 +335,8 @@ No untracked local material is part of the canonical state.
   reorganization.
 - Product-contract implementation gaps are recorded as UNVERIFIED.
 - Historical unresolved items have not all been reassessed against current code.
-- The separate npm vulnerability review remains pending before Milestone 1
-  resumes.
+- The remaining Next/PostCSS audit chain is a monitored maintenance item, not a
+  current blocker to Milestone 1 under the evidence recorded here.
 
 ## Resume Protocol
 
