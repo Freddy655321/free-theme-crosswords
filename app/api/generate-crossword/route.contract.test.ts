@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
-process.env.SUPABASE_URL = process.env.SUPABASE_URL ?? "https://example.supabase.co";
-process.env.SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? "contract-test-service-role";
+delete process.env.SUPABASE_URL;
+delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 type RouteModule = typeof import("./route");
 type ContractResponse = {
@@ -348,6 +347,46 @@ function functionSource(source: string, name: string): string {
   }
   throw new Error(`unterminated ${name}`);
 }
+
+test("route module import does not require Supabase env", async () => {
+  const route = await routeModulePromise;
+  assert.equal(typeof route.POST, "function");
+});
+
+test("missing Supabase config is non-fatal before generation handling", async () => {
+  const saved = new Map<string, string | undefined>();
+  for (const key of ENV_KEYS) saved.set(key, process.env[key]);
+  for (const key of ENV_KEYS) delete process.env[key];
+
+  const route = await routeModulePromise;
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  const savedOverrides = globalThis.__generateCrosswordTestOverrides;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+  globalThis.__generateCrosswordTestOverrides = undefined;
+
+  try {
+    const response = await route.POST(makeRequest({ theme: "garden tools", language: "en", size: 11 }) as never);
+    const json = await readJson(response);
+
+    assert.equal(response.status, 503);
+    assert.equal(json.meta?.source, "generation-error");
+    assert.equal(json.meta?.reason, "OPENAI_API_KEY no configurada.");
+    assert.ok(
+      warnings.some((args) => JSON.stringify(args).includes("Missing env var: SUPABASE_URL")),
+      "expected missing Supabase URL warning"
+    );
+  } finally {
+    console.warn = originalWarn;
+    globalThis.__generateCrosswordTestOverrides = savedOverrides;
+    for (const [key, value] of saved.entries()) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
 
 test("request normalization without OpenAI API key preserves current error envelope", async () => {
   await withRouteTest({}, async (route) => {

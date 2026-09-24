@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isCsp11Enabled, shouldUseCspDiagnosticOnly } from "@/app/lib/buildCspCrossword11";
@@ -112,11 +111,15 @@ function createGenerateCrosswordOpenAIClient(opts: GenerateCrosswordOpenAIOption
   return globalThis.__generateCrosswordTestOverrides?.createOpenAIClient?.(opts) ?? new OpenAI(opts);
 }
 
-function getGenerateCrosswordSupabaseSmokeClient(): GenerateCrosswordSupabaseSmokeClient {
-  return (
-    globalThis.__generateCrosswordTestOverrides?.getSupabaseSmokeClient?.() ??
-    (supabaseAdmin as unknown as GenerateCrosswordSupabaseSmokeClient)
-  );
+async function getGenerateCrosswordSupabaseSmokeClient(): Promise<GenerateCrosswordSupabaseSmokeClient> {
+  const override = globalThis.__generateCrosswordTestOverrides?.getSupabaseSmokeClient?.();
+  if (override) return override;
+
+  if (!process.env.SUPABASE_URL) throw new Error("Missing env var: SUPABASE_URL");
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) throw new Error("Missing env var: SUPABASE_SERVICE_ROLE_KEY");
+
+  const { supabaseAdmin } = await import("@/lib/supabaseAdmin");
+  return supabaseAdmin as unknown as GenerateCrosswordSupabaseSmokeClient;
 }
 
 // -------------------- Utils --------------------
@@ -1683,7 +1686,7 @@ function getDemoCrossword(size: number, theme: string, language: "es" | "en") {
 
 export async function POST(req: NextRequest) {
   try {
-    await getGenerateCrosswordSupabaseSmokeClient().from("crosswords").select("id").limit(1);
+    await (await getGenerateCrosswordSupabaseSmokeClient()).from("crosswords").select("id").limit(1);
   } catch (e) {
     console.warn("[generate-crossword] supabase check failed (non-fatal)", {
       error: e instanceof Error ? e.message : String(e),

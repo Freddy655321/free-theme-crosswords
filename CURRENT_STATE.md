@@ -3,14 +3,15 @@
 ## Snapshot
 
 - Branch: `main`
-- HEAD: `66d58b1 Align current state with product contract`
-- Relation to `origin/main`: `main` is ahead by 36 commits.
+- Current checkpoint: `Fix optional Supabase build dependency`
+- Relation to `origin/main`: synchronized after the checkpoint commit is pushed.
 - Tracked working tree: clean.
 - Canonical docs currently present and tracked:
   - `PROJECT.md`
   - `AGENTS.md`
   - `ARCHITECTURE.md`
   - `CURRENT_STATE.md`
+  - `ROADMAP.md`
 
 The ahead-of-origin count is Git state only. It is not an application-health or
 deployment-health claim.
@@ -28,6 +29,11 @@ The primary generation flow currently uses a fixed 11x11 generation size
 internally. Grid size is not a current user-configurable product input.
 
 The modular generation architecture is documented in `ARCHITECTURE.md`.
+
+The `/api/generate-crossword` route currently treats Supabase as a non-fatal
+smoke/health-style check. The optional Supabase smoke dependency no longer
+requires Supabase environment variables during route-module import or build
+evaluation.
 
 PRODUCT-OWNER-VERIFIED HISTORY: the generator has not yet demonstrated
 acceptable, genuinely general arbitrary-theme crossword generation. Historically
@@ -57,9 +63,13 @@ Important current commits:
 - `794cf68 Document current project state`
 - `fd5bb8c Define durable product contract`
 - `66d58b1 Align current state with product contract`
+- `c25b98c Record core generator maturity`
+- `b4469fe Establish product roadmap`
+- `fcd6590 Ignore local generated artifacts`
+- `Fix optional Supabase build dependency` checkpoint
 
 The canonical documentation foundation currently consists of `PROJECT.md`,
-`AGENTS.md`, `ARCHITECTURE.md`, and `CURRENT_STATE.md`.
+`AGENTS.md`, `ARCHITECTURE.md`, `CURRENT_STATE.md`, and `ROADMAP.md`.
 
 `fd5bb8c` is documentation and product-contract work. It is not evidence that
 the newly documented business requirements are implemented.
@@ -67,6 +77,11 @@ the newly documented business requirements are implemented.
 The Theme Independence / Fixture Contamination cleanup removed a known source
 of fixture contamination, but it does not itself establish acceptable
 arbitrary-theme generation quality.
+
+The Supabase deployment/build fix makes the generation route's optional
+Supabase smoke-client acquisition lazy and non-fatal. Missing Supabase
+configuration no longer causes the verified `Collecting page data` build
+failure for `/api/generate-crossword`.
 
 ## Validation Status
 
@@ -86,9 +101,22 @@ The commits after that validation were documentation-only:
 - `794cf68 Document current project state`
 - `fd5bb8c Define durable product contract`
 - `66d58b1 Align current state with product contract`
+- `c25b98c Record core generator maturity`
+- `b4469fe Establish product roadmap`
+- `fcd6590 Ignore local generated artifacts`
 
 These checks do not establish repository-wide lint status, runtime generation
 quality, generation benchmark results, or external-service runtime behavior.
+
+For the Supabase deployment/build fix checkpoint:
+
+- `npm.cmd run test:contract` - PASS - 12/12
+- file-scoped ESLint - PASS - for:
+  - `app/api/generate-crossword/route.ts`
+  - `app/api/generate-crossword/route.contract.test.ts`
+- `npx.cmd tsc --noEmit` - PASS
+- production build with `SUPABASE_URL=''` and
+  `SUPABASE_SERVICE_ROLE_KEY=''` - PASS
 
 ## Known Current Boundaries
 
@@ -98,6 +126,9 @@ quality, generation benchmark results, or external-service runtime behavior.
 - Fixture or example identities must not become production rules.
 - Historical audit and plan files are not canonical current truth.
 - Current implementation facts are authoritative over historical notes.
+- Supabase is currently a non-fatal smoke/health-style dependency in
+  `/api/generate-crossword`; persistence and reuse are not documented here as
+  implemented.
 
 Temporary implementation facts should not be treated as permanent product
 decisions unless recorded as durable decisions.
@@ -141,8 +172,8 @@ below were not investigated during this reorganization.
 
 UNVERIFIED does not mean definitely absent, broken, unfinished, or authorized next work.
 
-`ROADMAP.md`, if created, will determine which verified product gaps become
-authorized future work.
+`ROADMAP.md` determines which verified product gaps become authorized future
+work.
 
 ## Unfinished / Unresolved
 
@@ -150,7 +181,7 @@ The items below record previously identified areas that may matter to future
 work. Presence in current source does not equal a defect, and inclusion here
 does not authorize work.
 
-`ROADMAP.md`, if created, is the authority for authorized future direction.
+`ROADMAP.md` is the authority for authorized future direction.
 
 ### `prepareAttemptAnswers` boundary
 
@@ -206,22 +237,10 @@ present. Whether it should be removed, retained, or simplified was not reassesse
 
 ## Local / Non-Canonical Material
 
-The working tree contains unrelated untracked local or historical material.
+At this checkpoint, repository hygiene has removed the previously observed
+untracked local, generated, diagnostic, and historical-audit material.
 
-Observed categories include:
-
-- historical audit and plan documents under `docs/`
-- generated or temporary contract/CSP material
-- Next.js development logs
-- local diagnostic API endpoints
-- local data or support files
-- local smoke-test script
-
-These files are not part of the tracked canonical state.
-
-Their presence does not make them authoritative.
-
-They have not been reconciled, deleted, adopted, or classified as canonical.
+No untracked local material is part of the canonical state.
 
 ## Unverified
 
@@ -232,8 +251,8 @@ They have not been reconciled, deleted, adopted, or classified as canonical.
   reorganization.
 - Product-contract implementation gaps are recorded as UNVERIFIED.
 - Historical unresolved items have not all been reassessed against current code.
-- Untracked local material has not been reconciled.
-- No deployment state is verified by this file.
+- Vercel production deployment of the Supabase build fix is not verified by
+  this file unless confirmed separately after push.
 
 ## Resume Protocol
 
@@ -241,7 +260,7 @@ They have not been reconciled, deleted, adopted, or classified as canonical.
 2. Read `AGENTS.md`.
 3. Read `ARCHITECTURE.md`.
 4. Read `CURRENT_STATE.md`.
-5. Consult `ROADMAP.md` only if it exists and contains authorized work.
+5. Consult `ROADMAP.md` for authorized future product direction.
 6. Verify Git status and HEAD before modifying anything.
 7. Do not resume work from historical audit files unless current canonical state
    explicitly authorizes it.
