@@ -137,6 +137,51 @@ test("validateThematicAnswers preserves exact chat payload and parsed ordering",
   assert.equal((warnings[0] as unknown[])[0], "[generate-crossword] validate raw");
 });
 
+test("validateThematicAnswers preserves the chat completions receiver", async () => {
+  const receiverToken = Symbol("receiver");
+  const chatRequests: unknown[] = [];
+  type ReceiverSensitiveCompletions = {
+    receiverToken: symbol;
+    create(this: ReceiverSensitiveCompletions, args: unknown): Promise<OpenAiGenerationCompletion>;
+  };
+  const completions: ReceiverSensitiveCompletions = {
+    receiverToken,
+    async create(args) {
+      assert.equal(this.receiverToken, receiverToken);
+      chatRequests.push(args);
+      return {
+        choices: [{ finish_reason: "stop", message: { content: '{"keep":["ALPHA"]}' } }],
+      };
+    },
+  };
+  const client: OpenAiGenerationClient = {
+    chat: { completions },
+  };
+  const warnings: unknown[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+  try {
+    const result = await validateThematicAnswers({
+      client,
+      theme: "synthetic theme",
+      language: "en",
+      size: 11,
+      answers: ["ALPHA"],
+      attempt: 1,
+      answerbankSearchModel: "model-a",
+      sanitizeAnswerList: sanitize,
+    });
+
+    assert.deepEqual(result, ["ALPHA"]);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(chatRequests.length, 1);
+  assert.equal(warnings.length, 1);
+});
+
 test("validateThematicAnswers returns empty without a model call for empty answers", async () => {
   const { client, chatRequests } = makeClient(['{"keep":["ALPHA"]}']);
   const result = await validateThematicAnswers({

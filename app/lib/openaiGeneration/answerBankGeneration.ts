@@ -19,10 +19,10 @@ function createChatCompletion(
   client: OpenAiGenerationChatClient,
   request: OpenAiGenerationRequestArgs
 ): Promise<OpenAiGenerationCompletion> {
-  const create = client.chat.completions.create as unknown as (
-    args: OpenAiGenerationRequestArgs
-  ) => Promise<OpenAiGenerationCompletion>;
-  return create(request);
+  const completions = client.chat.completions as {
+    create(args: OpenAiGenerationRequestArgs): Promise<OpenAiGenerationCompletion>;
+  };
+  return completions.create(request);
 }
 
 export function buildAnswerbankPrompt(targetAnswers: number): string {
