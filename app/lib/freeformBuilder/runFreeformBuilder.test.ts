@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { WordCandidate } from "@/app/lib/crosswordTypes";
-import { runFreeformBuilder } from "./runFreeformBuilder";
+import {
+  runFreeformBuilder,
+  shouldAdmitRepairDensifyPlacement,
+} from "./runFreeformBuilder";
 import type { FreeformBuilderDependencies } from "./freeformBuilderTypes";
 
 const baseDependencies: FreeformBuilderDependencies = {
@@ -53,6 +56,55 @@ test("runFreeformBuilder is deterministic for the same seed", () => {
   const second = withMutedWarnings(() => runFreeformBuilder(input));
 
   assert.deepEqual(second, first);
+});
+
+test("repair densify rejects weak-preserving entry gains", () => {
+  assert.equal(
+    shouldAdmitRepairDensifyPlacement({
+      currentWeakCount: 4,
+      afterWeakCount: 4,
+      entryGain: 1,
+    }),
+    false
+  );
+
+  assert.equal(
+    shouldAdmitRepairDensifyPlacement({
+      currentWeakCount: 4,
+      afterWeakCount: 5,
+      entryGain: 1,
+    }),
+    false
+  );
+});
+
+test("repair densify still admits actual weak-entry improvement", () => {
+  assert.equal(
+    shouldAdmitRepairDensifyPlacement({
+      currentWeakCount: 4,
+      afterWeakCount: 3,
+      entryGain: 0,
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldAdmitRepairDensifyPlacement({
+      currentWeakCount: 0,
+      afterWeakCount: 0,
+      entryGain: 1,
+    }),
+    true
+  );
+
+  assert.equal(
+    shouldAdmitRepairDensifyPlacement({
+      currentWeakCount: 0,
+      afterWeakCount: 1,
+      entryGain: 1,
+    }),
+    false
+  );
 });
 
 test("runFreeformBuilder returns null for an empty usable pool", () => {

@@ -21,6 +21,21 @@ import {
   pruneDanglingRuns,
 } from "@/app/lib/gridValidation";
 import type { FreeformBuilderInput, FreeformBuilderResult } from "./freeformBuilderTypes";
+
+export function shouldAdmitRepairDensifyPlacement(input: {
+  currentWeakCount: number;
+  afterWeakCount: number;
+  entryGain: number;
+}): boolean {
+  const weakReduction = input.currentWeakCount - input.afterWeakCount;
+
+  if (input.currentWeakCount > 0) {
+    return weakReduction > 0;
+  }
+
+  return input.afterWeakCount === 0 && input.entryGain > 0;
+}
+
 export function runFreeformBuilder(opts: FreeformBuilderInput): FreeformBuilderResult | null {
   const { size, candidates, seed, dependencies } = opts;
   const {
@@ -1476,13 +1491,11 @@ const repairAndDensify11 = () => {
         const entryGain = evalResult.derived.length - projected.derived.length;
         const weakReduction = currentStats.weakEntries.length - afterStats.weakEntries.length;
 
-        if (currentStats.weakEntries.length > 0) {
-          if (weakReduction < -1) continue;
-          if (weakReduction === 0 && weakCrosses === 0 && entryGain <= 0) continue;
-        } else {
-          if (afterStats.weakEntries.length > 0) continue;
-          if (entryGain <= 0) continue;
-        }
+        if (!shouldAdmitRepairDensifyPlacement({
+          currentWeakCount: currentStats.weakEntries.length,
+          afterWeakCount: afterStats.weakEntries.length,
+          entryGain,
+        })) continue;
 
         if (evalResult.derived.length < Math.max(4, projected.derived.length - 1)) continue;
 
