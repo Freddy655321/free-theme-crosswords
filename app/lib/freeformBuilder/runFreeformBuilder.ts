@@ -52,6 +52,31 @@ export function runFreeformBuilder(opts: FreeformBuilderInput): FreeformBuilderR
 
   const deadline = opts.deadlineMs;
   const nowOk = () => !deadline || Date.now() <= deadline;
+  const constructorStartedAt = Date.now();
+  console.warn("[m1-construction-diag] constructor", {
+    strategy: "freeform",
+    phase: "start",
+    elapsedMs: 0,
+    deadlineRemainingMs: deadline ? deadline - constructorStartedAt : null,
+    candidateCount: candidates.length,
+  });
+
+  const finishConstructor = (
+    result: FreeformBuilderResult | null,
+    exitReason: string
+  ): FreeformBuilderResult | null => {
+    const finishedAt = Date.now();
+    console.warn("[m1-construction-diag] constructor", {
+      strategy: "freeform",
+      phase: "end",
+      elapsedMs: finishedAt - constructorStartedAt,
+      deadlineRemainingMs: deadline ? deadline - finishedAt : null,
+      candidateCount: candidates.length,
+      resultEntryCount: result ? Number(result.meta.entryCount ?? result.usedAnswers.length) : 0,
+      exitReason,
+    });
+    return result;
+  };
 
   const minLen = minEntryLenForSize(size);
 
@@ -82,7 +107,7 @@ export function runFreeformBuilder(opts: FreeformBuilderInput): FreeformBuilderR
     })
     .map((c) => c.answer);
 
-  if (rawWords.length === 0) return null;
+  if (rawWords.length === 0) return finishConstructor(null, "no-usable-words");
 
   const uniq = Array.from(new Set(rawWords));
 
@@ -115,8 +140,48 @@ const lengths = Array.from(byLen.keys()).sort(
 
   type BuildResult = { grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> };
 
-  const buildOnce = (localSeed: number): BuildResult | null => {
+  const buildOnce = (localSeed: number, startIndex: number): BuildResult | null => {
     const rng = makeSeededRng(localSeed);
+    const saturation = {
+      candidatesExamined: 0,
+      placementsEnumerated: 0,
+      placementsLegal: 0,
+      placementsRejectedValidity: 0,
+      placementsRejectedCrossing: 0,
+      placementsEligible: 0,
+      placementsCommitted: 0,
+    };
+
+    const emitSaturation = (stopReason: string) => {
+      console.warn("[m1-construction-diag] freeform-saturation", {
+        startIndex,
+        inputCandidates: candidates.length,
+        candidatesExamined: saturation.candidatesExamined,
+        placementsEnumerated: saturation.placementsEnumerated,
+        placementsLegal: saturation.placementsLegal,
+        placementsRejectedValidity: saturation.placementsRejectedValidity,
+        placementsRejectedCrossing: saturation.placementsRejectedCrossing,
+        placementsEligible: saturation.placementsEligible,
+        placementsCommitted: saturation.placementsCommitted,
+        remainingCandidatesAtStop: words.filter((word) => !used.has(word)).length,
+        stopReason,
+      });
+    };
+
+    const emitTerminal = (
+      stopReason: string,
+      fields: Record<string, unknown> = {}
+    ) => {
+      const now = Date.now();
+      console.warn("[m1-construction-diag] freeform-terminal", {
+        startIndex,
+        inputCandidates: candidates.length,
+        placedCount: placed.length,
+        stopReason,
+        deadlineRemainingMs: deadline ? deadline - now : null,
+        ...fields,
+      });
+    };
 
     const words: string[] = [];
     for (const L of lengths) {
@@ -129,6 +194,7 @@ const lengths = Array.from(byLen.keys()).sort(
 
     const grid = makeEmptyWorkingGrid(size);
     const placed: Placement[] = [];
+    const used = new Set<string>();
     const nonFillerWords = new Set(
       candidates.filter((c) => c.source !== "filler").map((c) => c.answer)
     );
@@ -318,6 +384,8 @@ if (!seedWord) {
     size,
     tried: words.slice(0, Math.min(12, words.length)),
   });
+  emitSaturation("no-seed");
+  emitTerminal("no-seed");
   return null;
 }
 
@@ -328,7 +396,7 @@ placed.push({
   dir: seedDir,
 });
 
-    const used = new Set<string>([seedWord]);
+    used.add(seedWord);
 
 const countLetters = (g: Cell[][]) =>
   g.reduce(
@@ -633,7 +701,10 @@ console.warn("[freeform] after seed placement", {
               crossings: checkA.crossings,
             };
             placements.push({ ...base, score: placementScore(base, word.length) });
+          } else if (checkA.ok) {
+            saturation.placementsRejectedCrossing++;
           } else if (!checkA.ok && checkA.reason) {
+            saturation.placementsRejectedValidity++;
             rejectReasonCounts.set(
               checkA.reason,
               (rejectReasonCounts.get(checkA.reason) ?? 0) + 1
@@ -652,7 +723,10 @@ console.warn("[freeform] after seed placement", {
               crossings: checkD.crossings,
             };
             placements.push({ ...base, score: placementScore(base, word.length) });
+          } else if (checkD.ok) {
+            saturation.placementsRejectedCrossing++;
           } else if (!checkD.ok && checkD.reason) {
+            saturation.placementsRejectedValidity++;
             rejectReasonCounts.set(
               checkD.reason,
               (rejectReasonCounts.get(checkD.reason) ?? 0) + 1
@@ -670,6 +744,7 @@ console.warn("[freeform] after seed placement", {
       });
 
       unique.sort((a, b) => b.score - a.score);
+      saturation.placementsEnumerated += unique.length;
       return unique;
     };
 
@@ -689,8 +764,14 @@ console.warn("[freeform] after seed placement", {
           for (const dir of ["across", "down"] as const) {
             const scratch = grid.map((r) => r.slice()) as Cell[][];
             const wrote = tryWriteWordLoose(scratch, word, row, col, dir);
-            if (!wrote.ok) continue;
-            if (wrote.crossings < minCrossesWanted) continue;
+            if (!wrote.ok) {
+              saturation.placementsRejectedValidity++;
+              continue;
+            }
+            if (wrote.crossings < minCrossesWanted) {
+              saturation.placementsRejectedCrossing++;
+              continue;
+            }
 
             let sideOpenings = 0;
             for (let i = 0; i < word.length; i++) {
@@ -735,6 +816,7 @@ console.warn("[freeform] after seed placement", {
       });
 
       unique.sort((a, b) => b.score - a.score);
+      saturation.placementsEnumerated += unique.length;
       return unique;
     };
 
@@ -757,6 +839,7 @@ const commitPlacementChecked = (
 };
 
 const tryPlaceOne = (word: string): boolean => {
+  saturation.candidatesExamined++;
   if (size === 11 && !nonFillerWords.has(word) && word.length <= 3) {
     return false;
   }
@@ -792,6 +875,9 @@ const tryPlaceOne = (word: string): boolean => {
     })
     .filter((item): item is { placement: typeof placements[number]; evalResult: NonNullable<ReturnType<typeof evaluateLoosePlacement>> } => Boolean(item))
     .sort((a, b) => b.evalResult.score - a.evalResult.score);
+  saturation.placementsLegal += evaluatedCandidates.length;
+  saturation.placementsEligible += evaluatedCandidates.length;
+  saturation.placementsRejectedValidity += candidatesToTry.length - evaluatedCandidates.length;
 
   for (const { placement: p, evalResult } of evaluatedCandidates) {
     if (!nowOk()) return false;
@@ -802,6 +888,7 @@ const tryPlaceOne = (word: string): boolean => {
     }
     placed.push({ word, row: p.row, col: p.col, dir: p.dir });
     used.add(word);
+    saturation.placementsCommitted++;
     return true;
   }
 
@@ -900,6 +987,7 @@ placed.push({
   dir: best.dir,
 });
 used.add(best.word);
+saturation.placementsCommitted++;
 
   console.warn("[freeform] second anchor placed", {
     word: best.word,
@@ -1106,15 +1194,27 @@ const collectPlacementsForFill = (word: string, minCrossesWanted: number) => {
       const cur = grid[rr][cc];
       const ch = word[i];
 
-      if (cur === "#") return;
-      if (cur !== "" && cur !== ch) return;
+      if (cur === "#") {
+        saturation.placementsRejectedValidity++;
+        return;
+      }
+      if (cur !== "" && cur !== ch) {
+        saturation.placementsRejectedValidity++;
+        return;
+      }
 
       if (cur === ch) crossings += 1;
       if (cur === "") newCells += 1;
     }
 
-    if (crossings < minCrossesWanted) return;
-    if (newCells === 0) return;
+    if (crossings < minCrossesWanted) {
+      saturation.placementsRejectedCrossing++;
+      return;
+    }
+    if (newCells === 0) {
+      saturation.placementsRejectedValidity++;
+      return;
+    }
 
     const centerBias =
       Math.abs(row - Math.floor(size / 2)) + Math.abs(col - Math.floor(size / 2));
@@ -1160,6 +1260,7 @@ const collectPlacementsForFill = (word: string, minCrossesWanted: number) => {
   });
 
   unique.sort((a, b) => b.score - a.score);
+  saturation.placementsEnumerated += unique.length;
   return unique;
 };
 
@@ -1183,6 +1284,7 @@ const collectPlacementsForFill = (word: string, minCrossesWanted: number) => {
         if (placed.length >= maxPlaced) break;
 
         wordsScanned++;
+        saturation.candidatesExamined++;
 
         const isThematic = nonFillerWords.has(w);
 
@@ -1274,6 +1376,9 @@ const collectPlacementsForFill = (word: string, minCrossesWanted: number) => {
             } => Boolean(item)
           )
           .sort((a, b) => b.evalResult.score - a.evalResult.score);
+        saturation.placementsLegal += scoredCandidates.length;
+        saturation.placementsEligible += scoredCandidates.length;
+        saturation.placementsRejectedValidity += candidatesToTry.length - scoredCandidates.length;
 
         const evaluatedCandidates =
           scoredCandidates.length > 0
@@ -1316,6 +1421,7 @@ const collectPlacementsForFill = (word: string, minCrossesWanted: number) => {
 
           placed.push({ word: w, row: p.row, col: p.col, dir: p.dir });
           used.add(w);
+          saturation.placementsCommitted++;
           addedThisPass++;
           totalAdded++;
           placedThisWord = true;
@@ -1583,6 +1689,11 @@ const placedAfterFillSlots = placed.length;
         before: derivedBeforePrune.length,
         after: derivedAfterPrune.length,
       });
+      emitSaturation("normalization-rejected");
+      emitTerminal("normalization-rejected", {
+        derivedBeforeNormalization: derivedBeforePrune.length,
+        derivedAfterNormalization: derivedAfterPrune.length,
+      });
       return null;
     }
 
@@ -1638,6 +1749,11 @@ if (size === 11 && hasShortLetterRuns(final, minEntryLenForSize(size))) {
   console.warn("[freeform] reject final short runs 11x11", {
     derived: derived.length,
   });
+  emitSaturation("normalization-rejected");
+  emitTerminal("normalization-rejected", {
+    derivedBeforeNormalization: derivedBeforeBlocking.length,
+    derivedAfterNormalization: derived.length,
+  });
   return null;
 }
 
@@ -1653,6 +1769,11 @@ if (invalidDerived.length > 0) {
       len: e.answer.length,
     })),
   });
+  emitSaturation("normalization-rejected");
+  emitTerminal("normalization-rejected", {
+    derivedBeforeNormalization: derivedBeforeBlocking.length,
+    derivedAfterNormalization: derived.length,
+  });
   return null;
 }
 
@@ -1662,6 +1783,7 @@ const nonFillerSet = new Set(
 const nonFillerUsed = derived.filter((e) => nonFillerSet.has(e.answer)).length;
 const nonFillerRatio = derived.length ? nonFillerUsed / derived.length : 0;
 const checkedStats = checkedCellStats(final, minEntryLenForSize(size));
+const weakCount = entryCrossingStats(final, derived, minEntryLenForSize(size)).weakEntries.length;
 
 const usedAnswers = Array.from(new Set(derived.map((e) => e.answer)));
 
@@ -1674,6 +1796,13 @@ console.warn("[freeform] build summary", {
   derivedAfterBlocking: derived.length,
   usedAnswersFinal: usedAnswers.length,
   densityFinal: crosswordDensityFromGrid(final),
+  checkedRatio: checkedStats.ratio,
+});
+emitSaturation(nowOk() ? "completed" : "deadline");
+emitTerminal(nowOk() ? "completed" : "deadline", {
+  derivedBeforeNormalization: derivedBeforeBlocking.length,
+  derivedAfterNormalization: derived.length,
+  weakCount,
   checkedRatio: checkedStats.ratio,
 });
 
@@ -1703,7 +1832,7 @@ console.warn("[freeform] build summary", {
     if (deadline && Date.now() > deadline) break;
 
     const localSeed = (seed ^ ((i + 1) * 0x9e3779b9)) >>> 0;
-    const res = buildOnce(localSeed);
+    const res = buildOnce(localSeed, i);
 
     if (!res) {
       console.warn("[freeform] buildOnce returned null", {
@@ -1764,9 +1893,12 @@ console.warn("[freeform] build summary", {
       usedCount >= (size === 11 ? minPublishEntriesForSize(size) : size === 9 ? 7 : 14) &&
       d >= targetDensity * (size === 11 ? 0.78 : 0.9)
     ) {
-      return res;
+      return finishConstructor(res, "publishable-result");
     }
   }
 
-  return best;
+  return finishConstructor(
+    best,
+    best ? "best-partial" : deadline && Date.now() > deadline ? "deadline" : "no-result"
+  );
 }

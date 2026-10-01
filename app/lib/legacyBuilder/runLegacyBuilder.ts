@@ -25,6 +25,9 @@ import type { LegacyBuilderInput, LegacyBuilderResult } from "./legacyBuilderTyp
 
 type LegacyBuilderRunOptions = Omit<LegacyBuilderInput, "mode">;
 
+const deadlineRemainingMs = (deadlineMs?: number) =>
+  typeof deadlineMs === "number" ? deadlineMs - Date.now() : null;
+
 function constructPatternCrossword11(opts: LegacyBuilderRunOptions): LegacyBuilderResult | null {
   const { theme, size, candidates, seed, deadlineMs, dependencies } = opts;
   const {
@@ -368,6 +371,14 @@ function constructPatternCrossword11(opts: LegacyBuilderRunOptions): LegacyBuild
       Array.from(totalByLen.entries()).map(([length, words]) => [length, words.length])
     ),
   });
+  console.warn("[m1-construction-diag] pattern-exhaustion", {
+    strategy: "pattern-11x11",
+    candidateCount: usable.length,
+    patternsOrMasksConsidered: rankedPatterns.length,
+    deadlineExit: !nowOk(),
+    deadlineRemainingMs: deadlineRemainingMs(deadlineMs),
+    exitReason: nowOk() ? "no-fill" : "deadline",
+  });
   return null;
 }
 
@@ -561,9 +572,27 @@ function constructCompactPatternCrossword11(opts: LegacyBuilderRunOptions): Lega
   let masksWithLengthSupply = 0;
   let solvedAttempts = 0;
   let firstLengthCompatibleMask: { rows: string[]; lengths: Record<number, number> } | null = null;
+  const emitCompactExhaustion = (exitReason: string) => {
+    console.warn("[m1-construction-diag] pattern-exhaustion", {
+      strategy: "compact-pattern-11x11",
+      candidateCount: usable.length,
+      patternsOrMasksConsidered: PATTERN_11X11S.length,
+      masksWithEnoughSlots,
+      masksWithCrossingValidity: masksWithCrossings,
+      masksWithLengthSupply,
+      fillAttempts: solvedAttempts,
+      solvedCount: solvedAttempts,
+      deadlineExit: exitReason === "deadline",
+      deadlineRemainingMs: deadlineRemainingMs(deadlineMs),
+      exitReason,
+    });
+  };
   for (const targetSlotCount of targetCounts) {
     for (let patternIdx = 0; patternIdx < PATTERN_11X11S.length; patternIdx++) {
-      if (!nowOk()) return null;
+      if (!nowOk()) {
+        emitCompactExhaustion("deadline");
+        return null;
+      }
       const pattern = PATTERN_11X11S[patternIdx];
       const fullSlots = extractPatternSlots(pattern);
       const availableSlotIndexes = fullSlots
@@ -574,7 +603,10 @@ function constructCompactPatternCrossword11(opts: LegacyBuilderRunOptions): Lega
       if (availableSlotIndexes.length < targetSlotCount) continue;
 
       for (let variant = 0; variant < 360; variant++) {
-        if (!nowOk()) return null;
+        if (!nowOk()) {
+          emitCompactExhaustion("deadline");
+          return null;
+        }
         const rng = makeSeededRng((seed + targetSlotCount * 1009 + patternIdx * 104729 + variant * 2654435761) >>> 0);
         const selected = new Set<number>();
         const orderedSeeds = availableSlotIndexes
@@ -715,6 +747,7 @@ function constructCompactPatternCrossword11(opts: LegacyBuilderRunOptions): Lega
     solvedAttempts,
     firstLengthCompatibleMask,
   });
+  emitCompactExhaustion("exhausted");
   return null;
 }
 
@@ -902,6 +935,17 @@ function constructBeamCrossword11(opts: LegacyBuilderRunOptions): LegacyBuilderR
   let expanded = 0;
   const beamWidth = 260;
   const maxExpanded = 12000;
+  const nowOkBeforeExpansion = nowOk();
+  console.warn("[m1-construction-diag] beam-pre-expansion", {
+    candidateCount: candidates.length,
+    seedCount: beam.length,
+    deadlineRemainingMs: deadlineRemainingMs(deadlineMs),
+    nowOkBeforeExpansion,
+    initialStateCount: beam.length,
+    expandedCountAtEntry: expanded,
+    exitGuard:
+      beam.length === 0 ? "no-seeds" : !nowOkBeforeExpansion ? "deadline" : "ready",
+  });
 
   for (let depth = 1; depth < 20 && beam.length > 0 && nowOk(); depth++) {
     const next: BeamState[] = [];
@@ -1329,20 +1373,47 @@ function constructGreedyCheckedCrossword11(opts: LegacyBuilderRunOptions): Legac
 
 
 export function runLegacyBuilder(input: LegacyBuilderInput): LegacyBuilderResult | null {
+  const startedAt = Date.now();
+  console.warn("[m1-construction-diag] constructor", {
+    strategy: input.mode,
+    phase: "start",
+    elapsedMs: 0,
+    deadlineRemainingMs: deadlineRemainingMs(input.deadlineMs),
+    candidateCount: input.candidates.length,
+  });
+
+  let result: LegacyBuilderResult | null;
   switch (input.mode) {
     case "pattern-11":
-      return constructPatternCrossword11(input);
+      result = constructPatternCrossword11(input);
+      break;
     case "compact-pattern-11":
-      return constructCompactPatternCrossword11(input);
+      result = constructCompactPatternCrossword11(input);
+      break;
     case "beam-11":
-      return constructBeamCrossword11(input);
+      result = constructBeamCrossword11(input);
+      break;
     case "strict-11":
-      return constructStrictCrossword11(input);
+      result = constructStrictCrossword11(input);
+      break;
     case "greedy-checked-11":
-      return constructGreedyCheckedCrossword11(input);
+      result = constructGreedyCheckedCrossword11(input);
+      break;
     default: {
       const exhaustive: never = input.mode;
       return exhaustive;
     }
   }
+
+  const finishedAt = Date.now();
+  console.warn("[m1-construction-diag] constructor", {
+    strategy: input.mode,
+    phase: "end",
+    elapsedMs: finishedAt - startedAt,
+    deadlineRemainingMs: deadlineRemainingMs(input.deadlineMs),
+    candidateCount: input.candidates.length,
+    resultEntryCount: result?.usedAnswers.length ?? 0,
+    exitReason: result ? "result" : input.deadlineMs && finishedAt > input.deadlineMs ? "deadline" : "null-result",
+  });
+  return result;
 }
