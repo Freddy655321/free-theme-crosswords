@@ -197,6 +197,14 @@ export function densifyCleanGrid11(opts: DensifyCleanGrid11Input): DensifyCleanG
     if (nextDerived.some((entry) => isForbiddenPublishAnswer(entry.answer))) return null;
     const nextWeakStats = entryCrossingStats(normalizedNextGrid, nextDerived, minLen);
     const nextWeakEntryCount = nextWeakStats.weakEntries.length;
+    const insertedEntryCrossings = nextWeakStats.counts.find((entry) => entry.answer === word);
+    if (!insertedEntryCrossings) return null;
+    if (
+      nextDerived.length >= targetEntries &&
+      insertedEntryCrossings.checkedCells < minCrossingsPerEntryForPublish(size)
+    ) {
+      return null;
+    }
     const allowTemporaryWeakRepairStep =
       opts.pruneWeakEntries === false && placement.weakCrossings > 0;
     if (nextWeakEntryCount > currentWeakEntryCount + (allowTemporaryWeakRepairStep ? 1 : 0)) {

@@ -54,14 +54,14 @@ function candidates(answers: Array<[string, boolean?, WordCandidate["source"]?]>
 }
 
 describe("gridEnhancement", () => {
-  it("densifies a weak grid with a crossing candidate", () => {
+  it("densify preserves below-target staged repair with a crossing candidate", () => {
     const deps = makeDependencies();
     const grid = withAcross(emptyGrid(), 5, 3, "ABCDE");
     const result = densifyCleanGrid11({
       theme: "Neutral",
       grid,
       candidates: candidates([["XCY"]]),
-      targetEntries: 2,
+      targetEntries: 3,
       seed: 123,
       pruneWeakEntries: false,
       dependencies: deps,
@@ -73,6 +73,39 @@ describe("gridEnhancement", () => {
     assert.equal(grid[4][5], "#");
     assert.equal(result.grid[4][5], "X");
     assert.equal(deps.logs.at(-1)?.[0], "[densify-11] completed");
+  });
+
+  it("densify rejects a target-reaching insertion when the added entry remains weak", () => {
+    const grid = withAcross(emptyGrid(), 5, 3, "ABCDE");
+    const result = densifyCleanGrid11({
+      theme: "Neutral",
+      grid,
+      candidates: candidates([["XCY"]]),
+      targetEntries: 2,
+      seed: 123,
+      pruneWeakEntries: false,
+      dependencies: makeDependencies(),
+    });
+
+    assert.equal(result, null);
+  });
+
+  it("densify admits a target-reaching insertion when the added entry is sufficiently checked", () => {
+    let grid = withAcross(emptyGrid(), 4, 3, "ABXDE");
+    grid = withAcross(grid, 6, 3, "FGYHI");
+    const result = densifyCleanGrid11({
+      theme: "Neutral",
+      grid,
+      candidates: candidates([["XCY"]]),
+      targetEntries: 3,
+      seed: 123,
+      pruneWeakEntries: false,
+      dependencies: makeDependencies(),
+    });
+
+    assert.ok(result);
+    assert.deepEqual(result.added, ["XCY"]);
+    assert.ok(result.derived.some((entry) => entry.answer === "XCY"));
   });
 
   it("densify returns null for no-op candidate sets", () => {
@@ -124,7 +157,7 @@ describe("gridEnhancement", () => {
       theme: "Neutral",
       grid: withAcross(emptyGrid(), 5, 3, "ABCDE"),
       candidates: candidates([["XCY"]]),
-      targetEntries: 2,
+      targetEntries: 3,
       seed: 123,
       deadlineMs: 1,
       pruneWeakEntries: false,
@@ -320,7 +353,7 @@ describe("gridEnhancement", () => {
       theme: "Neutral",
       grid,
       candidates: candidates([["XCY"]]),
-      targetEntries: 2,
+      targetEntries: 3,
       seed: 123,
       pruneWeakEntries: false,
       dependencies: makeDependencies(),
@@ -333,7 +366,7 @@ describe("gridEnhancement", () => {
       theme: "Neutral",
       grid,
       candidates: candidates([["ZCW"]]),
-      targetEntries: 2,
+      targetEntries: 3,
       seed: 124,
       pruneWeakEntries: false,
       dependencies: makeDependencies(),
