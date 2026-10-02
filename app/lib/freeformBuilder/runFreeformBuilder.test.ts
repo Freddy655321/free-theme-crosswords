@@ -1,14 +1,59 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { WordCandidate } from "@/app/lib/crosswordTypes";
+import type { Cell, WordCandidate } from "@/app/lib/crosswordTypes";
 import {
   maybeEmitPruneBoundaryCaptureForDiagnostics,
   runFreeformBuilder,
+  shouldAdmitFreeformFillScratch,
   shouldAdmitRepairDensifyPlacement,
 } from "./runFreeformBuilder";
 import type { FreeformBuilderDependencies } from "./freeformBuilderTypes";
 import { pruneDanglingRuns } from "../gridValidation";
 import type { PruneDanglingRunsTraceOptions } from "../gridValidation";
+import { deriveEntriesFromGrid } from "../publishPipeline";
+import { gridToStrings } from "../gridValidation";
+
+test("freeform fill admission rejects raw short runs even when fallback answer checks pass", () => {
+  const working: Cell[][] = Array.from({ length: 11 }, () => Array<Cell>(11).fill(""));
+  working[3].splice(3, 3, ..."CAT");
+  const original = working.map((row) => row.slice());
+  const scratch = working.map((row) => row.slice());
+  scratch[4].splice(3, 3, ..."DOG");
+  const entries = deriveEntriesFromGrid(gridToStrings(scratch), 3);
+  const allowed = new Set(["CAT", "DOG"]);
+
+  // The null-evaluation fallback's existing membership/presence checks pass.
+  assert.equal(entries.some((entry) => !allowed.has(entry.answer)), false);
+  assert.equal(entries.some((entry) => entry.answer === "DOG"), true);
+  assert.equal(shouldAdmitFreeformFillScratch(11, scratch), false);
+  assert.deepEqual(working, original);
+  assert.equal(scratch[4][3], "D");
+});
+
+test("freeform fill admission preserves comparable valid scratch grids without mutation", () => {
+  const scratch: Cell[][] = Array.from({ length: 11 }, () => Array<Cell>(11).fill(""));
+  scratch[3].splice(3, 3, ..."CAT");
+  scratch[5].splice(3, 3, ..."DOG");
+  const original = scratch.map((row) => row.slice());
+  const entries = deriveEntriesFromGrid(gridToStrings(scratch), 3);
+  assert.deepEqual(entries.map((entry) => entry.answer), ["CAT", "DOG"]);
+  assert.equal(shouldAdmitFreeformFillScratch(11, scratch), true);
+  assert.deepEqual(scratch, original);
+});
+
+test("freeform fill admission also rejects across short runs", () => {
+  const scratch: Cell[][] = Array.from({ length: 11 }, () => Array<Cell>(11).fill("#"));
+  scratch[3].splice(3, 2, ..."AT");
+  assert.equal(shouldAdmitFreeformFillScratch(11, scratch), false);
+});
+
+test("freeform fill admission leaves other grid sizes unchanged", () => {
+  for (const size of [9, 13]) {
+    const scratch: Cell[][] = Array.from({ length: size }, () => Array<Cell>(size).fill(""));
+    scratch[3].splice(3, 2, ..."AT");
+    assert.equal(shouldAdmitFreeformFillScratch(size, scratch), true);
+  }
+});
 
 const baseDependencies: FreeformBuilderDependencies = {
   isForbiddenPublishAnswer: () => false,

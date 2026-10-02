@@ -23,6 +23,10 @@ import {
 } from "@/app/lib/gridValidation";
 import type { FreeformBuilderInput, FreeformBuilderResult } from "./freeformBuilderTypes";
 
+export function shouldAdmitFreeformFillScratch(size: number, scratch: Cell[][]): boolean {
+  return size !== 11 || !hasShortLetterRuns(gridToStrings(scratch), minEntryLenForSize(size));
+}
+
 export function shouldAdmitRepairDensifyPlacement(input: {
   currentWeakCount: number;
   afterWeakCount: number;
@@ -1620,6 +1624,8 @@ const collectPlacementsForFill = (word: string, minCrossesWanted: number) => {
               continue;
             }
           }
+
+          if (!shouldAdmitFreeformFillScratch(size, scratch)) continue;
 
           placementsTried++;
 
