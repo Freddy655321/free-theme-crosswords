@@ -91,6 +91,83 @@ function withMutedWarnings<T>(fn: () => T): T {
   }
 }
 
+test("input capture preserves complete replay data, is process one-shot, and leaves construction unchanged", () => {
+  const pool: WordCandidate[] = [
+    ...candidates,
+    { answer: "PLANETS", thematic: false, source: "anchor" },
+    { answer: "BLOCKED", thematic: true, source: "support" },
+    { answer: "AT", thematic: false, source: "filler" },
+    { answer: "lowercase", thematic: true, source: "model" },
+    { answer: "TOOLONGFORGRID", thematic: true, source: "support" },
+  ];
+  const originalPool = structuredClone(pool);
+  pool.forEach(Object.freeze);
+  Object.freeze(pool);
+  const queried: string[] = [];
+  const input = {
+    size: 11,
+    candidates: pool,
+    seed: 12345,
+    maxBuilds: 1,
+    dependencies: { isForbiddenPublishAnswer: (answer: string) => {
+      queried.push(answer);
+      return answer === "BLOCKED" || answer === "STONE";
+    } },
+  };
+  const previousFlag = process.env.M1_FREEFORM_INPUT_CAPTURE;
+  const previousWarn = console.warn;
+  const captures: string[] = [];
+  console.warn = (event, payload) => {
+    if (event === "[m1-construction-diag] freeform-input-capture") {
+      assert.equal(typeof payload, "string");
+      captures.push(payload);
+    }
+  };
+  try {
+    delete process.env.M1_FREEFORM_INPUT_CAPTURE;
+    const disabled = runFreeformBuilder(input);
+    assert.equal(captures.length, 0);
+    queried.length = 0;
+    process.env.M1_FREEFORM_INPUT_CAPTURE = "1";
+    const enabled = runFreeformBuilder(input);
+    assert.deepEqual(enabled, disabled);
+    assert.equal(captures.length, 1);
+    const payload = JSON.parse(captures[0]);
+    assert.deepEqual(payload.candidates, originalPool);
+    assert.deepEqual(pool, originalPool);
+    assert.equal(JSON.stringify(payload), captures[0]);
+    assert.equal(payload.size, input.size);
+    assert.equal(payload.seed, input.seed);
+    assert.equal(payload.maxBuilds, 1);
+    assert.equal(payload.maxPlacedWords, null);
+    assert.equal(payload.deadline.deadlineMs, null);
+    assert.equal(payload.deadline.remainingMs, null);
+    assert.equal(typeof payload.deadline.capturedAtMs, "number");
+    assert.equal(payload.replayMode, "search-isolation");
+    const usable = [...new Set(pool.filter(({ answer }) =>
+      answer.length >= 3 && answer.length <= 11 && /^[A-Z0-9]+$/.test(answer)
+    ).map(({ answer }) => answer))];
+    assert.deepEqual(queried.slice(0, usable.length), usable);
+    assert.deepEqual(payload.forbiddenAnswers, ["STONE", "BLOCKED"]);
+    for (const answer of usable) {
+      assert.equal(payload.forbiddenAnswers.includes(answer), answer === "BLOCKED" || answer === "STONE");
+    }
+    queried.length = 0;
+    assert.deepEqual(runFreeformBuilder(input), disabled);
+    assert.equal(captures.length, 1);
+    // A skipped capture performs only the original constructor's policy queries.
+    const afterOneShotQueries = queried.slice();
+    queried.length = 0;
+    delete process.env.M1_FREEFORM_INPUT_CAPTURE;
+    runFreeformBuilder(input);
+    assert.deepEqual(queried, afterOneShotQueries);
+  } finally {
+    console.warn = previousWarn;
+    if (previousFlag === undefined) delete process.env.M1_FREEFORM_INPUT_CAPTURE;
+    else process.env.M1_FREEFORM_INPUT_CAPTURE = previousFlag;
+  }
+});
+
 test("runFreeformBuilder is deterministic for the same seed", () => {
   const input = {
     size: 11,

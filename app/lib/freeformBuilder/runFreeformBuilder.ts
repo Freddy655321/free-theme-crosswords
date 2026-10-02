@@ -23,6 +23,41 @@ import {
 } from "@/app/lib/gridValidation";
 import type { FreeformBuilderInput, FreeformBuilderResult } from "./freeformBuilderTypes";
 
+const inputCaptureKey = Symbol.for("wordynamo.m1.freeform-input-capture.emitted");
+
+function maybeCaptureFreeformInput(opts: FreeformBuilderInput): void {
+  if (process.env.M1_FREEFORM_INPUT_CAPTURE !== "1") return;
+  const captureState = globalThis as typeof globalThis & { [key: symbol]: boolean | undefined };
+  if (captureState[inputCaptureKey]) return;
+  // Claim before evaluation/emission: constructor restarts and module copies share one shot.
+  captureState[inputCaptureKey] = true;
+  const capturedAtMs = Date.now();
+  const minLen = minEntryLenForSize(opts.size);
+  const candidates = opts.candidates.map(({ answer, thematic, source }) => ({ answer, thematic, source }));
+  const usableAnswers = new Set(candidates
+    .filter(({ answer }) => answer.length >= minLen && answer.length <= opts.size && ASCII_A_TO_Z.test(answer))
+    .map(({ answer }) => answer));
+  const forbiddenAnswers = Array.from(usableAnswers)
+    .filter((answer) => opts.dependencies.isForbiddenPublishAnswer(answer));
+  console.warn("[m1-construction-diag] freeform-input-capture", JSON.stringify({
+    version: 1,
+    replayMode: "search-isolation",
+    size: opts.size,
+    seed: opts.seed,
+    // null records an omitted option; replay omits it to retain constructor defaults.
+    maxBuilds: opts.maxBuilds ?? null,
+    maxPlacedWords: opts.maxPlacedWords ?? null,
+    deadline: {
+      deadlineMs: opts.deadlineMs ?? null,
+      capturedAtMs,
+      remainingMs: opts.deadlineMs ? opts.deadlineMs - capturedAtMs : null,
+      replayHandling: "omit deadlineMs; not exact timed replay",
+    },
+    candidates,
+    forbiddenAnswers,
+  }));
+}
+
 export function shouldAdmitFreeformFillScratch(size: number, scratch: Cell[][]): boolean {
   return size !== 11 || !hasShortLetterRuns(gridToStrings(scratch), minEntryLenForSize(size));
 }
@@ -250,6 +285,7 @@ export function maybeEmitPruneBoundaryCaptureForDiagnostics(input: {
 }
 
 export function runFreeformBuilder(opts: FreeformBuilderInput): FreeformBuilderResult | null {
+  maybeCaptureFreeformInput(opts);
   const { size, candidates, seed, dependencies } = opts;
   const {
     isForbiddenPublishAnswer,
