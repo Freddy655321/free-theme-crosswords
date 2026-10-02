@@ -2,10 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { WordCandidate } from "@/app/lib/crosswordTypes";
 import {
+  maybeEmitPruneBoundaryCaptureForDiagnostics,
   runFreeformBuilder,
   shouldAdmitRepairDensifyPlacement,
 } from "./runFreeformBuilder";
 import type { FreeformBuilderDependencies } from "./freeformBuilderTypes";
+import { pruneDanglingRuns } from "../gridValidation";
+import type { PruneDanglingRunsTraceOptions } from "../gridValidation";
 
 const baseDependencies: FreeformBuilderDependencies = {
   isForbiddenPublishAnswer: () => false,
@@ -251,4 +254,130 @@ test("runFreeformBuilder reports null when no crossings can be committed", () =>
   }));
 
   assert.equal(result, null);
+});
+
+test("prune-boundary capture emits once for high-placement prune damage", () => {
+  const beforeGrid = [
+    "AAA#BBB#CCC",
+    "D###E###F##",
+    "D###E###F##",
+    "D###E###F##",
+    "GGG#HHH#III",
+    "J###K###L##",
+    "J###K###L##",
+    "J###K###L##",
+    "MMM#NNN#OOO",
+    "###########",
+    "###########",
+  ].map((row) => row.split(""));
+  const afterGrid = beforeGrid.map((row) => row.slice());
+  for (const [r, c] of [
+    [0, 0],
+    [0, 1],
+    [0, 2],
+    [4, 0],
+    [4, 1],
+    [4, 2],
+    [8, 0],
+    [8, 1],
+    [8, 2],
+  ]) {
+    afterGrid[r][c] = "#";
+  }
+
+  const beforeEntries = Array.from({ length: 15 }, (_, index) => ({
+    answer: `WORD${index}`,
+    direction: index % 2 === 0 ? "across" as const : "down" as const,
+    row: index % 11,
+    col: Math.floor(index / 2) % 11,
+  }));
+  const afterEntries = beforeEntries.slice(3);
+  const events: Array<{ prefix: unknown; payload: Record<string, unknown> }> = [];
+  const original = console.warn;
+  console.warn = (prefix: unknown, payload: Record<string, unknown>) => {
+    events.push({ prefix, payload });
+  };
+  try {
+    const emitted = maybeEmitPruneBoundaryCaptureForDiagnostics({
+      alreadyEmitted: false,
+      size: 11,
+      startIndex: 2,
+      localSeed: 123,
+      placedCount: 15,
+      candidateCount: 85,
+      minLen: 3,
+      beforeGrid,
+      afterGrid,
+      beforeEntries,
+      afterEntries,
+      pruneIterations: [
+        {
+          iteration: 0,
+          cells: [
+            {
+              r: 0,
+              c: 0,
+              value: "A",
+              reasons: [{ direction: "across", runLength: 2 }],
+            },
+          ],
+        },
+      ],
+    });
+    const second = maybeEmitPruneBoundaryCaptureForDiagnostics({
+      alreadyEmitted: emitted,
+      size: 11,
+      startIndex: 3,
+      localSeed: 456,
+      placedCount: 16,
+      candidateCount: 85,
+      minLen: 3,
+      beforeGrid,
+      afterGrid,
+      beforeEntries,
+      afterEntries,
+      pruneIterations: [],
+    });
+
+    assert.equal(emitted, true);
+    assert.equal(second, false);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].prefix, "[m1-construction-diag] prune-boundary-capture");
+    assert.equal(events[0].payload.beforeCount, 15);
+    assert.equal(events[0].payload.afterCount, 12);
+    assert.equal((events[0].payload.lostEntries as unknown[]).length, 3);
+    assert.equal((events[0].payload.pruneIterations as unknown[]).length, 1);
+  } finally {
+    console.warn = original;
+  }
+});
+
+test("pruneDanglingRuns trace records removed cells without changing output", () => {
+  const grid = [
+    "ABC##",
+    "####D",
+    "####E",
+    "#####",
+    "#####",
+  ].map((row) => row.split(""));
+  const trace: PruneDanglingRunsTraceOptions = { iterations: [] };
+
+  const traced = pruneDanglingRuns(grid, 3, trace);
+  const untraced = pruneDanglingRuns(grid, 3);
+
+  assert.deepEqual(traced, untraced);
+  assert.equal(trace.iterations?.length, 1);
+  assert.deepEqual(
+    trace.iterations?.[0].cells.map((cell) => ({
+      r: cell.r,
+      c: cell.c,
+      value: cell.value,
+      reasons: cell.reasons,
+    })),
+    [
+      { r: 1, c: 4, value: "D", reasons: [{ direction: "down", runLength: 2 }] },
+      { r: 2, c: 4, value: "E", reasons: [{ direction: "down", runLength: 2 }] },
+    ]
+  );
+  assert.equal(grid[1][4], "D");
 });

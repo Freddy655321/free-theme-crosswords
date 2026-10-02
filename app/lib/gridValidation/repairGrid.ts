@@ -178,7 +178,30 @@ export function enforceMinWordLen(blocked: Cell[][], minLen: number): Cell[][] {
   return grid;
 }
 
-export function pruneDanglingRuns(blocked: Cell[][], minLen: number): Cell[][] {
+export type PruneDanglingRunsTraceCell = {
+  r: number;
+  c: number;
+  value: Cell;
+  reasons: Array<{
+    direction: "across" | "down";
+    runLength: number;
+  }>;
+};
+
+export type PruneDanglingRunsTraceIteration = {
+  iteration: number;
+  cells: PruneDanglingRunsTraceCell[];
+};
+
+export type PruneDanglingRunsTraceOptions = {
+  iterations?: PruneDanglingRunsTraceIteration[];
+};
+
+export function pruneDanglingRuns(
+  blocked: Cell[][],
+  minLen: number,
+  trace?: PruneDanglingRunsTraceOptions
+): Cell[][] {
   const n = blocked.length;
   const grid = blocked.map((row) => row.slice());
 
@@ -210,9 +233,11 @@ export function pruneDanglingRuns(blocked: Cell[][], minLen: number): Cell[][] {
 
   let changed = true;
 
+  let iteration = 0;
+
   while (changed) {
     changed = false;
-    const toKill: Array<{ r: number; c: number }> = [];
+    const toKill: PruneDanglingRunsTraceCell[] = [];
 
     for (let r = 0; r < n; r++) {
       for (let c = 0; c < n; c++) {
@@ -222,15 +247,29 @@ export function pruneDanglingRuns(blocked: Cell[][], minLen: number): Cell[][] {
         const ld = runLenDownAt(r, c);
 
         if ((la > 1 && la < minLen) || (ld > 1 && ld < minLen)) {
-          toKill.push({ r, c });
+          const reasons: PruneDanglingRunsTraceCell["reasons"] = [];
+          if (la > 1 && la < minLen) reasons.push({ direction: "across", runLength: la });
+          if (ld > 1 && ld < minLen) reasons.push({ direction: "down", runLength: ld });
+          toKill.push({ r, c, value: grid[r][c], reasons });
         }
       }
     }
 
     if (toKill.length > 0) {
       changed = true;
+      trace?.iterations?.push({
+        iteration,
+        cells: toKill.map((cell) => ({
+          r: cell.r,
+          c: cell.c,
+          value: cell.value,
+          reasons: cell.reasons.map((reason) => ({ ...reason })),
+        })),
+      });
       for (const cell of toKill) grid[cell.r][cell.c] = "#";
     }
+
+    iteration++;
   }
 
   return grid;

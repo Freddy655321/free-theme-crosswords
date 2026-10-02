@@ -15,6 +15,7 @@ import {
   gridToStrings,
   hasShortLetterRuns,
   keepLargestConnectedComponent,
+  minCrossingsPerEntryForPublish,
   minEntryLenForSize,
   minPublishEntriesForSize,
   paintBlocks,
@@ -34,6 +35,214 @@ export function shouldAdmitRepairDensifyPlacement(input: {
   }
 
   return input.afterWeakCount === 0 && input.entryGain > 0;
+}
+
+type PruneBoundaryEntrySnapshot = {
+  answer: string;
+  direction: Direction;
+  row: number;
+  col: number;
+  length: number;
+  checkedCells: number;
+  weak: boolean;
+};
+
+const entryKey = (entry: { answer: string; direction: Direction; row: number; col: number }) =>
+  `${entry.answer}:${entry.direction}:${entry.row}:${entry.col}`;
+
+const checkedCellsForEntry = (
+  grid: string[][],
+  entries: Array<{ answer: string; direction: Direction; row: number; col: number }>,
+  entry: { answer: string; direction: Direction; row: number; col: number }
+) => {
+  const hasAcrossEntryAt = (r: number, c: number) =>
+    entries.some(
+      (other) =>
+        other.direction === "across" &&
+        other.row === r &&
+        c >= other.col &&
+        c < other.col + other.answer.length
+    );
+  const hasDownEntryAt = (r: number, c: number) =>
+    entries.some(
+      (other) =>
+        other.direction === "down" &&
+        other.col === c &&
+        r >= other.row &&
+        r < other.row + other.answer.length
+    );
+
+  let checkedCells = 0;
+  for (let i = 0; i < entry.answer.length; i++) {
+    const r = entry.direction === "down" ? entry.row + i : entry.row;
+    const c = entry.direction === "across" ? entry.col + i : entry.col;
+    if (grid[r]?.[c] === "#") continue;
+    if (hasAcrossEntryAt(r, c) && hasDownEntryAt(r, c)) checkedCells++;
+  }
+  return checkedCells;
+};
+
+const snapshotEntries = (
+  grid: string[][],
+  entries: Array<{ answer: string; direction: Direction; row: number; col: number }>
+): PruneBoundaryEntrySnapshot[] =>
+  entries.map((entry) => {
+    const checkedCells = checkedCellsForEntry(grid, entries, entry);
+    return {
+      answer: entry.answer,
+      direction: entry.direction,
+      row: entry.row,
+      col: entry.col,
+      length: entry.answer.length,
+      checkedCells,
+      weak: checkedCells < minCrossingsPerEntryForPublish(grid.length),
+    };
+  });
+
+const componentSummary = (grid: string[][]) => {
+  const n = grid.length;
+  const seen = Array.from({ length: n }, () => Array.from({ length: n }, () => false));
+  const sizes: number[] = [];
+  const dirs = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ] as const;
+
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (seen[r][c] || grid[r]?.[c] === "#") continue;
+      let size = 0;
+      const stack = [{ r, c }];
+      seen[r][c] = true;
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        size++;
+        for (const [dr, dc] of dirs) {
+          const rr = cur.r + dr;
+          const cc = cur.c + dc;
+          if (!inBounds(n, rr, cc)) continue;
+          if (seen[rr][cc] || grid[rr]?.[cc] === "#") continue;
+          seen[rr][cc] = true;
+          stack.push({ r: rr, c: cc });
+        }
+      }
+      sizes.push(size);
+    }
+  }
+
+  sizes.sort((a, b) => b - a);
+  return {
+    count: sizes.length,
+    sizes,
+  };
+};
+
+export function buildPruneBoundaryCaptureForDiagnostics(input: {
+  startIndex: number;
+  localSeed: number;
+  placedCount: number;
+  candidateCount: number;
+  minLen: number;
+  beforeGrid: string[][];
+  afterGrid: string[][];
+  beforeEntries: Array<{ answer: string; direction: Direction; row: number; col: number }>;
+  afterEntries: Array<{ answer: string; direction: Direction; row: number; col: number }>;
+  pruneIterations: Array<{
+    iteration: number;
+    cells: Array<{
+      r: number;
+      c: number;
+      value: Cell;
+      reasons: Array<{ direction: "across" | "down"; runLength: number }>;
+    }>;
+  }>;
+}) {
+  const beforeKeys = new Set(input.beforeEntries.map(entryKey));
+  const afterKeys = new Set(input.afterEntries.map(entryKey));
+  const changedToBlock: Array<{ r: number; c: number; before: string }> = [];
+
+  for (let r = 0; r < input.beforeGrid.length; r++) {
+    for (let c = 0; c < input.beforeGrid[r].length; c++) {
+      const before = input.beforeGrid[r][c];
+      const after = input.afterGrid[r]?.[c] ?? "#";
+      if (before !== "#" && after === "#") changedToBlock.push({ r, c, before });
+    }
+  }
+
+  return {
+    temporary: true,
+    startIndex: input.startIndex,
+    localSeed: input.localSeed,
+    placedCount: input.placedCount,
+    candidateCount: input.candidateCount,
+    beforeCount: input.beforeEntries.length,
+    afterCount: input.afterEntries.length,
+    beforeGrid: input.beforeGrid.map((row) => row.join("")),
+    afterGrid: input.afterGrid.map((row) => row.join("")),
+    beforeEntries: snapshotEntries(input.beforeGrid, input.beforeEntries),
+    afterEntries: snapshotEntries(input.afterGrid, input.afterEntries),
+    lostEntries: input.beforeEntries
+      .filter((entry) => !afterKeys.has(entryKey(entry)))
+      .map((entry) => ({
+        answer: entry.answer,
+        direction: entry.direction,
+        row: entry.row,
+        col: entry.col,
+        length: entry.answer.length,
+      })),
+    gainedEntries: input.afterEntries
+      .filter((entry) => !beforeKeys.has(entryKey(entry)))
+      .map((entry) => ({
+        answer: entry.answer,
+        direction: entry.direction,
+        row: entry.row,
+        col: entry.col,
+        length: entry.answer.length,
+      })),
+    cellsChangedToBlock: changedToBlock,
+    shortRunsBefore: hasShortLetterRuns(input.beforeGrid, input.minLen),
+    shortRunsAfter: hasShortLetterRuns(input.afterGrid, input.minLen),
+    componentsBefore: componentSummary(input.beforeGrid),
+    componentsAfter: componentSummary(input.afterGrid),
+    pruneIterations: input.pruneIterations,
+  };
+}
+
+export function maybeEmitPruneBoundaryCaptureForDiagnostics(input: {
+  alreadyEmitted: boolean;
+  size: number;
+  startIndex: number;
+  localSeed: number;
+  placedCount: number;
+  candidateCount: number;
+  minLen: number;
+  beforeGrid: string[][];
+  afterGrid: string[][];
+  beforeEntries: Array<{ answer: string; direction: Direction; row: number; col: number }>;
+  afterEntries: Array<{ answer: string; direction: Direction; row: number; col: number }>;
+  pruneIterations: Array<{
+    iteration: number;
+    cells: Array<{
+      r: number;
+      c: number;
+      value: Cell;
+      reasons: Array<{ direction: "across" | "down"; runLength: number }>;
+    }>;
+  }>;
+}): boolean {
+  if (input.alreadyEmitted) return false;
+  if (input.size !== 11) return false;
+  if (input.placedCount < minPublishEntriesForSize(input.size)) return false;
+  if (input.afterEntries.length >= input.beforeEntries.length) return false;
+  if (input.afterEntries.length >= Math.max(4, input.beforeEntries.length - 2)) return false;
+
+  console.warn(
+    "[m1-construction-diag] prune-boundary-capture",
+    buildPruneBoundaryCaptureForDiagnostics(input)
+  );
+  return true;
 }
 
 export function runFreeformBuilder(opts: FreeformBuilderInput): FreeformBuilderResult | null {
@@ -139,6 +348,7 @@ const lengths = Array.from(byLen.keys()).sort(
   const rounds = size === 9 ? 4 : size === 11 ? 28 : 6;
 
   type BuildResult = { grid: string[][]; usedAnswers: string[]; meta: Record<string, unknown> };
+  let emittedPruneBoundaryCapture = false;
 
   const buildOnce = (localSeed: number, startIndex: number): BuildResult | null => {
     const rng = makeSeededRng(localSeed);
@@ -1671,7 +1881,22 @@ const placedAfterFillSlots = placed.length;
     blocked = enforceMinWordLen(blocked, minEntryLenForSize(size));
 
     const blockedBeforePrune = blocked.map((row) => row.slice());
-    const prunedBlocked = pruneDanglingRuns(blocked, minEntryLenForSize(size));
+    const shouldTracePruneBoundary =
+      size === 11 && placed.length >= minPublishEntriesForSize(size) && !emittedPruneBoundaryCapture;
+    const pruneTrace = shouldTracePruneBoundary
+      ? {
+          iterations: [] as Array<{
+            iteration: number;
+            cells: Array<{
+              r: number;
+              c: number;
+              value: Cell;
+              reasons: Array<{ direction: "across" | "down"; runLength: number }>;
+            }>;
+          }>,
+        }
+      : undefined;
+    const prunedBlocked = pruneDanglingRuns(blocked, minEntryLenForSize(size), pruneTrace);
     const derivedBeforePrune = deriveEntriesFromGrid(
       gridToStrings(blockedBeforePrune as (string | null)[][]),
       minEntryLenForSize(size)
@@ -1685,6 +1910,25 @@ const placedAfterFillSlots = placed.length;
       size === 11 &&
       derivedAfterPrune.length < Math.max(4, derivedBeforePrune.length - 2)
     ) {
+      if (shouldTracePruneBoundary && pruneTrace) {
+        const beforeGrid = gridToStrings(blockedBeforePrune as (string | null)[][]);
+        const afterGrid = gridToStrings(prunedBlocked as (string | null)[][]);
+        emittedPruneBoundaryCapture =
+          maybeEmitPruneBoundaryCaptureForDiagnostics({
+            alreadyEmitted: emittedPruneBoundaryCapture,
+            size,
+            startIndex,
+            localSeed,
+            placedCount: placed.length,
+            candidateCount: candidates.length,
+            minLen: minEntryLenForSize(size),
+            beforeGrid,
+            afterGrid,
+            beforeEntries: derivedBeforePrune,
+            afterEntries: derivedAfterPrune,
+            pruneIterations: pruneTrace.iterations,
+          }) || emittedPruneBoundaryCapture;
+      }
       console.warn("[freeform] reject prune-damaged 11x11", {
         before: derivedBeforePrune.length,
         after: derivedAfterPrune.length,
