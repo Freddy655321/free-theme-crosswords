@@ -54,6 +54,42 @@ type MockOpenAIResponse = string | Error | ((call: MockOpenAICall, args: ChatCom
 
 const routeModulePromise = import("./route");
 
+test("answer-bank connection diagnostics stay out of the response", async () => {
+  await withRouteTest({ OPENAI_API_KEY: "test-key", CROSSWORD_CSP_11_ENABLED: "false" }, async (route) => {
+    const error = new Error("Connection error.", {
+      cause: new TypeError("fetch failed", {
+        cause: Object.assign(new Error("certificate diagnostic evidence"), { code: "CERT_TEST" }),
+      }),
+    });
+    globalThis.__generateCrosswordTestOverrides = {
+      ...globalThis.__generateCrosswordTestOverrides,
+      createOpenAIClient: () => ({ chat: { completions: { create: async () => { throw error; } } } }) as never,
+    };
+    const logs: unknown[][] = [];
+    const previousWarn = console.warn;
+    console.warn = (...args: unknown[]) => { logs.push(args); };
+    try {
+      const response = await route.POST(makeRequest({ theme: "silent film restoration", language: "en", size: 11 }) as Parameters<typeof route.POST>[0]);
+      assert.equal(response.status, 503);
+      const json = await response.json();
+      assert.deepEqual(json, {
+        error: "No se pudo generar un crucigrama jugable con la calidad requerida.",
+        theme: "silent film restoration", language: "en", size: 11,
+        meta: {
+          source: "openai-error",
+          reason: "No se pudo obtener el banco inicial de respuestas tematicas desde OpenAI.",
+          lastModelError: "Error: Connection error.; compact fallback: Error: Connection error.; answer-only emergency: Error: Connection error.",
+          lastAnswerbankIssue: null,
+        },
+      });
+      const diagnostics = logs.filter(([label]) => String(label).includes("connection diagnostic"));
+      assert.equal(diagnostics.length, 6);
+      for (const [, diagnostic] of diagnostics) assert.match(String(diagnostic), /certificate diagnostic evidence \(CERT_TEST\)/);
+      assert.doesNotMatch(JSON.stringify(json), /CERT_TEST|certificate diagnostic evidence|fetch failed/);
+    } finally { console.warn = previousWarn; }
+  });
+});
+
 const ENV_KEYS = [
   "OPENAI_API_KEY",
   "ENABLE_DIRECT_MODEL_11",

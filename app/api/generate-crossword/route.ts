@@ -13,6 +13,7 @@ import type {
 import {
   ASCII_A_TO_Z,
   errorSummary,
+  serverErrorDiagnostic,
   normalizeAnswer,
 } from "@/app/lib/crosswordUtils";
 import {
@@ -2059,6 +2060,7 @@ export async function POST(req: NextRequest) {
               });
       } catch (e: unknown) {
         lastModelError = errorSummary(e);
+        console.warn("[generate-crossword] answerbank connection diagnostic", serverErrorDiagnostic(e));
         console.warn("[generate-crossword] model1 failed", {
           attempt,
           error: lastModelError,
@@ -2095,6 +2097,7 @@ export async function POST(req: NextRequest) {
           });
         } catch (fallbackError: unknown) {
           lastModelError = `${lastModelError}; compact fallback: ${errorSummary(fallbackError)}`;
+          console.warn("[generate-crossword] answerbank fallback connection diagnostic", serverErrorDiagnostic(fallbackError));
           console.warn("[generate-crossword] compact answerbank fallback failed", {
             attempt,
             error: lastModelError,
@@ -2133,6 +2136,7 @@ export async function POST(req: NextRequest) {
               }
             } catch (emergencyError: unknown) {
               lastModelError = `${lastModelError}; answer-only emergency: ${errorSummary(emergencyError)}`;
+              console.warn("[generate-crossword] answerbank emergency connection diagnostic", serverErrorDiagnostic(emergencyError));
               return { status: "continue", lastModelError };
             }
           } else {

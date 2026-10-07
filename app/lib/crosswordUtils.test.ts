@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   errorSummary,
+  serverErrorDiagnostic,
   inBounds,
   makeSeededRng,
   normalizeAnswer,
@@ -28,6 +29,50 @@ test("errorSummary preserves current Error and cause-code formatting", () => {
   const error = new Error("failed") as Error & { cause?: { code: string } };
   error.cause = { code: "ECONNRESET" };
   assert.equal(errorSummary(error), "Error: failed (ECONNRESET)");
+});
+
+test("server diagnostic preserves nested evidence without changing summaries or inputs", () => {
+  const cause = Object.freeze(Object.assign(new Error("certificate failed"), { code: "CERT_TEST" }));
+  const fetchError = Object.freeze(new TypeError("fetch failed", { cause }));
+  const error = Object.freeze(new Error("Connection error.", { cause: fetchError }));
+  assert.equal(errorSummary(error), "Error: Connection error.");
+  assert.equal(serverErrorDiagnostic(error), "Error: Connection error.; cause: TypeError: fetch failed; cause: Error: certificate failed (CERT_TEST)");
+  assert.equal(error.cause, fetchError);
+  assert.equal(fetchError.cause, cause);
+  assert.equal(cause.code, "CERT_TEST");
+});
+
+test("server diagnostic bounds depth, aggregate children, cycles and text", () => {
+  let error = new Error("outside-bound");
+  for (let i = 3; i >= 0; i--) error = new Error(`level-${i}`, { cause: error });
+  const diagnostic = serverErrorDiagnostic(error);
+  assert.match(diagnostic, /level-3; cause: \[limit\]/);
+  assert.doesNotMatch(diagnostic, /outside-bound/);
+  const aggregate = new AggregateError(Array.from({ length: 10 }, (_, i) => new Error(`child-${i}`)), "aggregate");
+  assert.match(serverErrorDiagnostic(aggregate), /AggregateError: aggregate/);
+  assert.doesNotMatch(serverErrorDiagnostic(aggregate), /child-3/);
+  const cyclic = new Error("cycle") as Error & { cause: unknown };
+  cyclic.cause = cyclic;
+  assert.match(serverErrorDiagnostic(cyclic), /\[cycle\]/);
+  assert.equal(serverErrorDiagnostic(new Error("x".repeat(10000))).length, 307);
+});
+
+test("server diagnostic excludes sensitive properties and handles malformed causes", () => {
+  const error = Object.assign(new Error("safe"), {
+    headers: { authorization: "secret-header" }, body: "secret-body", prompt: "secret-prompt",
+    apiKey: "secret-key", request: { anything: "secret-request" },
+    cause: { message: "nested", code: "ECONNRESET", unrelated: "secret-other" },
+  });
+  assert.doesNotMatch(serverErrorDiagnostic(error), /secret/);
+  for (const message of ["Bearer secret", "sk-test-secret", "authorization: secret", "prompt: secret"]) {
+    assert.equal(serverErrorDiagnostic(new Error(message)), "Error: [redacted]");
+  }
+  for (const cause of [null, 1, "secret", Symbol("secret"), { toString() { throw new Error(); } },
+    Object.defineProperty({}, "message", { get() { throw new Error(); } })]) {
+    assert.doesNotThrow(() => serverErrorDiagnostic(new Error("safe", { cause })));
+  }
+  const proxy = Proxy.revocable({}, {}); proxy.revoke();
+  assert.doesNotThrow(() => serverErrorDiagnostic(proxy.proxy));
 });
 
 test("safeJson parses valid JSON and salvages object text without throwing", () => {
