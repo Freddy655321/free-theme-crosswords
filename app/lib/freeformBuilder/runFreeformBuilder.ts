@@ -22,6 +22,7 @@ import {
   pruneDanglingRuns,
 } from "@/app/lib/gridValidation";
 import type { FreeformBuilderInput, FreeformBuilderResult } from "./freeformBuilderTypes";
+import { runMultiState11 } from "./multiState11";
 
 const inputCaptureKey = Symbol.for("wordynamo.m1.freeform-input-capture.emitted");
 
@@ -2111,6 +2112,8 @@ emitTerminal(nowOk() ? "completed" : "deadline", {
     };
   };
 
+  const multiState = size === 11 ? runMultiState11({ ...opts, deadlineMs: deadline === undefined ? undefined : Math.min(deadline, Date.now() + 5000) }) : null;
+  if (multiState?.publishable && multiState.result) return finishConstructor(multiState.result, "publishable-result");
   let best: BuildResult | null = null;
   let bestScore = -Infinity;
 
@@ -2183,6 +2186,14 @@ emitTerminal(nowOk() ? "completed" : "deadline", {
     }
   }
 
+  if (multiState?.result) {
+    const alternative = multiState.result;
+    const quality = (result: BuildResult) => {
+      const entries = deriveEntriesFromGrid(result.grid, minEntryLenForSize(size));
+      return entries.length * 1000 - entryCrossingStats(result.grid, entries, minEntryLenForSize(size)).weakEntries.length * 100;
+    };
+    if (!best || quality(alternative) > quality(best)) best = alternative;
+  }
   return finishConstructor(
     best,
     best ? "best-partial" : deadline && Date.now() > deadline ? "deadline" : "no-result"
