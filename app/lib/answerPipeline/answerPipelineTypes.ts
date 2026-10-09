@@ -170,7 +170,7 @@ export type RequestAnswerTopUpClient = {
   };
 };
 
-export type RequestAnswerTopUpParseMode = "answers-with-salvage" | "answers-no-salvage";
+export type RequestAnswerTopUpParseMode = "answers-with-salvage" | "answers-no-salvage" | "support-complete-items";
 
 export type RequestAnswerTopUpLoggerPayload = {
   rawText: string;

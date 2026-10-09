@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { sanitizeAnswerListWithPolicies } from "./sanitizeAnswers";
 
 import { requestAnswerTopUp, type RequestAnswerTopUpInput, type RequestAnswerTopUpRequestArgs } from "./index";
 
@@ -13,6 +14,53 @@ const requestArgs: RequestAnswerTopUpRequestArgs = {
     { role: "user", content: "user message" },
   ],
 };
+
+test("support fallback accepts only complete strings in the intended array", async () => {
+  const cases: Array<[string, string[]]> = [
+    ['{"answers":["ALPHA","BETA"],"notes":["OTHER"]}', []],
+    ['{"answers":[]} trailing', []],
+    ['{"answers":null}', []],
+    ['{"answers":["ALPHA","BETA",', ["ALPHA", "BETA"]],
+    ['{"answers":["ALPHA","BET', ["ALPHA"]],
+    ['{"answers":["ALPHA"', ["ALPHA"]],
+    [String.raw`{"answers":["A\"B","C\\D","caf\u00e9","fin`, ['A"B', "C\\D", "café"]],
+    [String.raw`{"answers":["ALPHA","bad\q","BETA"`, ["ALPHA"]],
+    ['{"answers":["ALPHA","BETA"junk', ["ALPHA"]],
+    ['{"answers":["ALPHA",{"answer":"OTHER"},"BETA"', ["ALPHA"]],
+    ['{"answers":["ALPHA" "BETA"', []],
+    ['junk {"answers":["ALPHA",', []],
+    ['{"other":{"answers":["ALPHA",', []],
+    ['{"broken":,"answers":["ALPHA",', []],
+    ['{"answers":["ALPHA"],"notes":["OTHER",', ["ALPHA"]],
+    ['{"answers":["café","árbol","東京",', ["café", "árbol", "東京"]],
+  ];
+  for (const [rawText, expected] of cases) {
+    const result = await requestAnswerTopUp(makeInput({ rawText, parseMode: "support-complete-items" }));
+    assert.deepEqual(result.salvagedAnswers, expected, rawText);
+    if (rawText.startsWith('{"answers":["ALPHA","BETA"],')) {
+      assert.deepEqual(result.cleanedAnswers, ["ALPHA", "BETA"]);
+    }
+  }
+});
+
+test("support salvage uses the same sanitizer, policies and deduplication as valid JSON", async () => {
+  const values = ["ALPHA", "alpha", "BANNED", "BAD", "WRONGLANG", "TOOLONGWORD", "AB", "café"];
+  for (const language of ["en", "es"] as const) {
+    const sanitize: RequestAnswerTopUpInput["sanitize"] = (raw, maxLen, lang) =>
+      sanitizeAnswerListWithPolicies(raw, maxLen, lang, {
+        asciiAnswerPattern: /^[A-Z0-9]+$/,
+        bannedAnswers: new Set(["BANNED"]),
+        alwaysAllowAnswers: new Set(),
+        isLikelyBadAnswer: (answer) => answer === "BAD",
+        answerLanguageLooksValidForPuzzle: (answer) => answer !== "WRONGLANG",
+      });
+    const full = JSON.stringify({ answers: values });
+    const valid = await requestAnswerTopUp(makeInput({ rawText: full, parseMode: "support-complete-items", sanitize, language, maxLen: 8 }));
+    const recovered = await requestAnswerTopUp(makeInput({ rawText: full.slice(0, -2) + ',"unfinished', parseMode: "support-complete-items", sanitize, language, maxLen: 8 }));
+    assert.deepEqual(recovered.cleanedAnswers, valid.cleanedAnswers);
+    assert.deepEqual(recovered.cleanedAnswers, ["ALPHA", "CAFE"]);
+  }
+});
 
 function makeClient(rawText: string) {
   const calls: RequestAnswerTopUpRequestArgs[] = [];

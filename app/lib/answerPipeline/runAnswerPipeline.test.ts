@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { requestAnswerTopUp } from "./requestAnswerTopUp";
 
 import type { WordCandidate } from "@/app/lib/crosswordTypes";
 import {
@@ -326,10 +327,17 @@ test("runAnswerPipeline preserves validation fallback filtering when model valid
   assert.deepEqual(result.validated, ["KEEP", "CORE"]);
 });
 
-test("runAnswerPipeline preserves support words, fallback notes, support validation, and semantic support", async () => {
+test("runAnswerPipeline applies existing admission and validation to salvaged support", async () => {
   const dependencies = makeDependencies({
     now: () => 0,
-    generateSupportWords: async () => ["SUPPORT", "BAD"],
+    generateSupportWords: async () => (await requestAnswerTopUp({
+      client: { chat: { completions: { create: async () => ({ choices: [{ message: {
+        content: '{"answers":["SUPPORT","BAD","unfinished',
+      } }] }) } } },
+      request: { model: "test", messages: [], temperature: 0, max_tokens: 1, response_format: { type: "json_object" } },
+      parseMode: "support-complete-items", maxLen: 8, language: "en",
+      sanitize: (raw) => Array.isArray(raw) ? raw as string[] : [],
+    })).cleanedAnswers,
     validateThematicAnswers: async ({ answers }) => answers.filter((answer) => answer !== "BAD"),
     inferLocalSupportWords: () => [{ answer: "LOCAL", thematic: true }],
     rankSemanticSupportWords: async () => ["SEMANTIC"],

@@ -943,7 +943,7 @@ Return JSON only.
         { role: "user", content: prompt },
       ],
     },
-    parseMode: "answers-no-salvage",
+    parseMode: "support-complete-items",
     maxLen: Math.min(size, 8),
     language,
     sanitize: opts.sanitizeAnswerList,

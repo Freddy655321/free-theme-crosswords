@@ -446,7 +446,7 @@ test("generateLengthBalancedThematicAnswers preserves exact-length payload and d
   assert.equal((chatRequests[0] as { max_tokens: number }).max_tokens, 900);
 });
 
-test("generateSupportWords keeps no-salvage behavior and filters short sanitized answers", async () => {
+test("generateSupportWords rejects unstructured text", async () => {
   const { client, chatRequests } = makeClient(["reef kelp"]);
   const result = await generateSupportWords({
     client,
@@ -463,6 +463,23 @@ test("generateSupportWords keeps no-salvage behavior and filters short sanitized
   assert.equal((chatRequests[0] as { model: string }).model, "search-model");
   assert.equal((chatRequests[0] as { temperature: number }).temperature, 0.2);
   assert.equal((chatRequests[0] as { max_tokens: number }).max_tokens, 2200);
+});
+
+test("generateSupportWords routes complete truncated items through its sanitizer", async () => {
+  const { client } = makeClient(['{"answers":["ALPHA","BETA","unfinished']);
+  let received: unknown;
+  const result = await generateSupportWords({
+    client, theme: "neutral context", language: "es", size: 11, existing: [],
+    attempt: 1, answerbankSearchModel: "test-model",
+    sanitizeAnswerList: (raw, maxLen, language) => {
+      received = raw;
+      assert.equal(maxLen, 8);
+      assert.equal(language, "es");
+      return ["ALPHA", "AB"];
+    },
+  });
+  assert.deepEqual(received, ["ALPHA", "BETA"]);
+  assert.deepEqual(result, ["ALPHA"]);
 });
 
 test("OpenAI generation services propagate request and sanitizer exceptions without retries", async () => {
