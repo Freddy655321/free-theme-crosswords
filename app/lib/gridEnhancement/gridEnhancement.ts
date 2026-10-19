@@ -7,6 +7,7 @@ import {
   checkedCellStats,
   crossedEntryStats,
   entryCrossingStats,
+  hasAcceptableCrossingCoverage,
   gridToStrings,
   hasShortLetterRuns,
   minCrossingsPerEntryForPublish,
@@ -431,7 +432,7 @@ export function augmentNoShortGridWithCandidates(
   if (!bestFinal) return null;
   if (bestFinal.derived.length < minimumReturnEntries) return null;
   if (hasShortLetterRuns(bestFinal.grid, minLen)) return null;
-  if (entryCrossingStats(bestFinal.grid, bestFinal.derived, minLen).weakEntries.length > 0) return null;
+  if (!hasAcceptableCrossingCoverage(entryCrossingStats(bestFinal.grid, bestFinal.derived, minLen))) return null;
   return bestFinal;
 }
 

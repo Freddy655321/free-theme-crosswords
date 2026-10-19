@@ -37,6 +37,7 @@ import {
   crosswordDensityFromGrid,
   desiredPublishEntriesForSize,
   entryCrossingStats,
+  hasAcceptableCrossingCoverage,
   hasShortLetterRuns,
   maxGenericContextEntriesForPublish,
   minCoreThematicEntriesForPublish,
@@ -263,7 +264,7 @@ export async function runGenerationPipeline(input: GenerationPipelineInput): Pro
     if (
       openingEntries.length < targetEntries ||
       openingCrossed.crossed < openingEntries.length ||
-      openingEntryCrossings.weakEntries.length > 0 ||
+      !hasAcceptableCrossingCoverage(openingEntryCrossings) ||
       openingDensity < 0.4 ||
       openingChecked.ratio < 0.25 ||
       openingThemeEntries < openingMinThemeEntries ||
@@ -1020,7 +1021,7 @@ console.warn("[generate-crossword] ok: pool", {
                   const structurallyClean =
                     invalidAnswers === 0 &&
                     shortRunPenalty === 0 &&
-                    entryCrossings.weakEntries.length === 0 &&
+                    hasAcceptableCrossingCoverage(entryCrossings) &&
                     checked.ratio >= 0.25;
                   return (
                     (hasPreferredEntryCount ? 3_000_000 : 0) +
@@ -1905,7 +1906,7 @@ console.warn("[generate-crossword] ok: pool", {
         bestThematicEntries >= bestMinThematicEntries &&
         !hasShortLetterRuns(bestForGate.built.grid, minEntryLenForSize(n)) &&
         bestCrossedStats.crossed >= bestForGate.derived.length &&
-        bestEntryCrossingStats.weakEntries.length === 0 &&
+        hasAcceptableCrossingCoverage(bestEntryCrossingStats) &&
         bestCheckedStats.ratio >= 0.25 &&
         !bestForGate.derived.some((entry) => isForbiddenPublishAnswer(entry.answer))
       ) {
@@ -1985,7 +1986,7 @@ console.warn("[generate-crossword] ok: pool", {
           !directQualityIssue &&
           directCoreEntries >= minCoreThematicEntriesForPublish(n, directEntries.length) &&
           directGenericContextEntries <= maxGenericContextEntriesForPublish(n, directEntries.length) &&
-          bestEntryCrossingStats.weakEntries.length === 0
+          hasAcceptableCrossingCoverage(bestEntryCrossingStats)
         ) {
           return accepted(
             {
@@ -2167,7 +2168,7 @@ console.warn("[generate-crossword] ok: pool", {
             directCoreEntries < minCoreThematicEntriesForPublish(n, directEntries.length) ||
             directGenericContextEntries > maxGenericContextEntriesForPublish(n, directEntries.length) ||
             bestCrossedStats.crossed < directEntries.length ||
-            bestEntryCrossingStats.weakEntries.length > 0 ||
+            !hasAcceptableCrossingCoverage(bestEntryCrossingStats) ||
             bestCheckedStats.ratio < 0.25;
 
           if (directBlocksPublish) {
@@ -2178,7 +2179,7 @@ console.warn("[generate-crossword] ok: pool", {
               directCoreEntries >= minCoreThematicEntriesForPublish(n, directEntries.length) &&
               directGenericContextEntries <= maxGenericContextEntriesForPublish(n, directEntries.length) &&
               bestCrossedStats.crossed >= Math.max(6, directEntries.length - 1) &&
-              bestEntryCrossingStats.weakEntries.length === 0 &&
+              hasAcceptableCrossingCoverage(bestEntryCrossingStats) &&
               bestCheckedStats.ratio >= 0.25 &&
               !hasShortLetterRuns(bestForGate.built.grid, minEntryLenForSize(n)) &&
               !directEntries.some((entry) => isForbiddenPublishAnswer(entry.answer));
@@ -2393,7 +2394,7 @@ console.warn("[generate-crossword] ok: pool", {
             if (
               cleanupEntries.length >= minPublishEntriesForSize(n) &&
               cleanupCrossed.crossed >= minCrossedEntriesForPublish(n) &&
-              cleanupEntryCrossings.weakEntries.length === 0 &&
+              hasAcceptableCrossingCoverage(cleanupEntryCrossings) &&
               cleanupChecked.ratio >= 0.25 &&
               cleanupThemeEntries >= minThematicEntriesForPublish(n, cleanupEntries.length) &&
               cleanupCoreEntries >= minCoreThematicEntriesForPublish(n, cleanupEntries.length) &&
@@ -2943,7 +2944,7 @@ console.warn("[generate-crossword] ok: pool", {
             valid:
               publishEntries.length >= minPublishEntriesForSize(n) &&
               crossed.crossed >= minCrossedEntriesForPublish(n) &&
-              entryCrossings.weakEntries.length === 0 &&
+              hasAcceptableCrossingCoverage(entryCrossings) &&
               checked.ratio >= 0.25 &&
               thematicEntries >= minThematicEntriesForPublish(n, publishEntries.length) &&
               coreThematicEntries >= minCoreThematicEntriesForPublish(n, publishEntries.length) &&
@@ -3639,7 +3640,7 @@ console.warn("[generate-crossword] ok: pool", {
             if (hasShortLetterRuns(candidate.grid, minLenForFallback)) return false;
             if (candidate.derived.some((entry) => isForbiddenPublishAnswer(entry.answer))) return false;
             if (
-              entryCrossingStats(candidate.grid, candidate.derived, minLenForFallback).weakEntries.length > 0
+              !hasAcceptableCrossingCoverage(entryCrossingStats(candidate.grid, candidate.derived, minLenForFallback))
             ) {
               return false;
             }
@@ -4709,7 +4710,7 @@ console.warn("[generate-crossword] ok: pool", {
               if (
                 structuralRescueEntries.length >= minPublishEntriesForSize(n) &&
                 structuralRescueCrossed.crossed >= structuralRescueEntries.length &&
-                structuralRescueEntryCrossings.weakEntries.length === 0 &&
+                hasAcceptableCrossingCoverage(structuralRescueEntryCrossings) &&
                 structuralRescueChecked.ratio >= 0.25 &&
                 structuralRescueThemeEntries >= minThematicEntriesForPublish(n, structuralRescueEntries.length) &&
                 structuralRescueCoreEntries >= minCoreThematicEntriesForPublish(n, structuralRescueEntries.length) &&
@@ -4792,7 +4793,7 @@ console.warn("[generate-crossword] ok: pool", {
                 minEntryLenForSize(n)
               );
               if (rebuiltWithoutWeak.derived.length < minPublishEntriesForSize(n)) continue;
-              if (crossingsWithoutWeak.weakEntries.length > 0) continue;
+              if (!hasAcceptableCrossingCoverage(crossingsWithoutWeak)) continue;
               if (hasShortLetterRuns(rebuiltWithoutWeak.grid, minEntryLenForSize(n))) continue;
 
               directFallbackPublishGrid = rebuiltWithoutWeak.grid;
@@ -4951,7 +4952,7 @@ console.warn("[generate-crossword] ok: pool", {
             !directFallbackPublishEntries.some((entry) => isForbiddenPublishAnswer(entry.answer)) &&
             directFallbackUnsupportedEntries.length === 0 &&
             directFallbackCrossedStats.crossed >= minCrossedEntriesForPublish(n) &&
-            directFallbackEntryCrossingStats.weakEntries.length === 0 &&
+            hasAcceptableCrossingCoverage(directFallbackEntryCrossingStats) &&
             directFallbackCheckedStats.ratio >= 0.25 &&
             directFallbackThemeEntries >= directFallbackMinThemeEntries &&
             directFallbackCoreThematicEntries >= directFallbackMinCoreThematicEntries &&
@@ -5008,7 +5009,7 @@ console.warn("[generate-crossword] ok: pool", {
             !directFallbackPublishEntries.some((entry) => isForbiddenPublishAnswer(entry.answer)) &&
             directFallbackUnsupportedEntries.length === 0 &&
             directFallbackCrossedStats.crossed >= Math.max(6, directFallbackPublishEntries.length - 1) &&
-            directFallbackEntryCrossingStats.weakEntries.length === 0 &&
+            hasAcceptableCrossingCoverage(directFallbackEntryCrossingStats) &&
             directFallbackCheckedStats.ratio >= 0.25 &&
             directFallbackPlaceholderCount === 0 &&
             !directFallbackQualityIssue
@@ -5070,7 +5071,7 @@ console.warn("[generate-crossword] ok: pool", {
             !directFallbackPublishEntries.some((entry) => isForbiddenPublishAnswer(entry.answer)) &&
             directFallbackUnsupportedEntries.length === 0 &&
             directFallbackCrossedStats.crossed >= directFallbackPublishEntries.length &&
-            directFallbackEntryCrossingStats.weakEntries.length === 0 &&
+            hasAcceptableCrossingCoverage(directFallbackEntryCrossingStats) &&
             directFallbackCheckedStats.ratio >= 0.25 &&
             directFallbackPlaceholderCount === 0 &&
             !directFallbackEmergencyQualityIssue
@@ -5176,7 +5177,7 @@ console.warn("[generate-crossword] ok: pool", {
             if (
               noShortEntries.length >= minPublishEntriesForSize(n) &&
               noShortCrossed.crossed >= minCrossedEntriesForPublish(n) &&
-              noShortEntryCrossingStats.weakEntries.length === 0 &&
+              hasAcceptableCrossingCoverage(noShortEntryCrossingStats) &&
               noShortStats.ratio >= 0.25 &&
               noShortThemeEntries >= noShortMinThemeEntries &&
               noShortCoreThematicEntries >= noShortMinCoreThematicEntries &&
@@ -5384,7 +5385,7 @@ console.warn("[generate-crossword] ok: pool", {
             if (
               openingEntries.length >= minPublishEntriesForSize(n) &&
               openingCrossed.crossed >= openingEntries.length &&
-              openingEntryCrossings.weakEntries.length === 0 &&
+              hasAcceptableCrossingCoverage(openingEntryCrossings) &&
               openingDensity >= 0.4 &&
               openingChecked.ratio >= 0.25 &&
               openingThemeEntries >= openingMinThemeEntries &&
@@ -5517,7 +5518,7 @@ console.warn("[generate-crossword] ok: pool", {
             if (
               lateLayoutEntries.length >= minPublishEntriesForSize(n) &&
               lateLayoutCrossed.crossed >= minCrossedEntriesForPublish(n) &&
-              lateLayoutEntryCrossings.weakEntries.length === 0 &&
+              hasAcceptableCrossingCoverage(lateLayoutEntryCrossings) &&
               lateLayoutThemeEntries >= lateLayoutMinThemeEntries &&
               lateLayoutCoreEntries >= lateLayoutMinCoreEntries &&
               lateLayoutGenericContextEntries <= lateLayoutMaxGenericEntries &&
@@ -5620,7 +5621,7 @@ console.warn("[generate-crossword] ok: pool", {
             if (
               lateGridEntries.length >= minPublishEntriesForSize(n) &&
               lateGridCrossed.crossed >= minCrossedEntriesForPublish(n) &&
-              lateGridEntryCrossings.weakEntries.length === 0 &&
+              hasAcceptableCrossingCoverage(lateGridEntryCrossings) &&
               lateGridThemeEntries >= lateGridMinThemeEntries &&
               lateGridCoreEntries >= lateGridMinCoreEntries &&
               lateGridGenericContextEntries <= lateGridMaxGenericEntries &&
@@ -5743,7 +5744,7 @@ console.warn("[generate-crossword] ok: pool", {
             if (
               cleanDegradedResponseEntries.length >= minPublishEntriesForSize(n) &&
               cleanDegradedCrossed.crossed >= minCrossedEntriesForPublish(n) &&
-              cleanDegradedEntryCrossingStats.weakEntries.length === 0 &&
+              hasAcceptableCrossingCoverage(cleanDegradedEntryCrossingStats) &&
               cleanDegradedThemeEntries >= cleanDegradedMinThemeEntries &&
               cleanDegradedCoreThematicEntries >= cleanDegradedMinCoreThematicEntries &&
               cleanDegradedGenericContextEntries <= cleanDegradedMaxGenericContextEntries &&
@@ -5840,7 +5841,7 @@ console.warn("[generate-crossword] ok: pool", {
             if (
               openingEntries.length >= minPublishEntriesForSize(n) &&
               openingCrossed.crossed >= openingEntries.length &&
-              openingEntryCrossings.weakEntries.length === 0 &&
+              hasAcceptableCrossingCoverage(openingEntryCrossings) &&
               openingDensity >= 0.4 &&
               openingChecked.ratio >= 0.25 &&
               openingThemeEntries >= openingMinThemeEntries &&
@@ -5924,7 +5925,7 @@ console.warn("[generate-crossword] ok: pool", {
             directFallbackCoreThematicEntries >= directFallbackMinCoreThematicEntries &&
             directFallbackGenericContextEntries <= directFallbackMaxGenericContextEntries &&
             directFallbackCrossedStats.crossed >= Math.max(6, directFallbackPublishEntries.length - 1) &&
-            directFallbackEntryCrossingStats.weakEntries.length === 0 &&
+            hasAcceptableCrossingCoverage(directFallbackEntryCrossingStats) &&
             directFallbackPlaceholderCount === 0 &&
             !hasShortLetterRuns(directFallbackPublishGrid, minEntryLenForSize(n));
 
@@ -5975,7 +5976,7 @@ console.warn("[generate-crossword] ok: pool", {
             !directFallbackPublishEntries.some((entry) => isForbiddenPublishAnswer(entry.answer)) &&
             directFallbackUnsupportedEntries.length === 0 &&
             directFallbackCrossedStats.crossed >= Math.max(6, directFallbackPublishEntries.length - 1) &&
-            directFallbackEntryCrossingStats.weakEntries.length === 0 &&
+            hasAcceptableCrossingCoverage(directFallbackEntryCrossingStats) &&
             directFallbackCheckedStats.ratio >= 0.25 &&
             !hasShortLetterRuns(directFallbackPublishGrid, minEntryLenForSize(n)) &&
             directFallbackPlaceholderCount === 0 &&
@@ -6098,7 +6099,7 @@ console.warn("[generate-crossword] ok: pool", {
             !hasShortLetterRuns(noShortFallbackGrid, minEntryLenForSize(n)) &&
             noShortFallbackUnsupported.length === 0 &&
             noShortFallbackCrossed.crossed >= Math.max(6, noShortFallbackEntries.length - 1) &&
-            noShortFallbackEntryCrossings.weakEntries.length === 0 &&
+            hasAcceptableCrossingCoverage(noShortFallbackEntryCrossings) &&
             noShortFallbackChecked.ratio >= 0.25 &&
             noShortFallbackThemeEntries >= minThematicEntriesForPublish(n, noShortFallbackEntries.length) &&
             noShortFallbackCoreEntries >= minCoreThematicEntriesForPublish(n, noShortFallbackEntries.length) &&
@@ -6208,7 +6209,7 @@ console.warn("[generate-crossword] ok: pool", {
               if (
                 lastChanceEntries.length >= minPublishEntriesForSize(n) &&
                 lastChanceCrossed.crossed >= minCrossedEntriesForPublish(n) &&
-                lastChanceEntryCrossings.weakEntries.length === 0 &&
+                hasAcceptableCrossingCoverage(lastChanceEntryCrossings) &&
                 lastChanceChecked.ratio >= 0.25 &&
                 lastChanceThemeEntries >= minThematicEntriesForPublish(n, lastChanceEntries.length) &&
                 lastChanceCoreEntries >= minCoreThematicEntriesForPublish(n, lastChanceEntries.length) &&
@@ -6364,7 +6365,7 @@ console.warn("[generate-crossword] ok: pool", {
               checkedThemeEntries < checkedMinThemeEntries ||
               checkedCoreThematicEntries < checkedMinCoreThematicEntries ||
               checkedGenericContextEntries > checkedMaxGenericContextEntries ||
-              checkedEntryCrossingStats.weakEntries.length > 0))
+              !hasAcceptableCrossingCoverage(checkedEntryCrossingStats)))
         ) {
           return failed(
             {
@@ -6522,7 +6523,7 @@ console.warn("[generate-crossword] ok: pool", {
         repairedFallbackEntriesForResponse.length >= minPublishEntriesForSize(n) &&
         fallbackThemeEntries >= fallbackMinThemeEntries &&
         placeholderCount === 0 &&
-        fallbackEntryCrossingStats.weakEntries.length === 0 &&
+        hasAcceptableCrossingCoverage(fallbackEntryCrossingStats) &&
         !hasShortLetterRuns(fallbackGridForResponse, minEntryLenForSize(n)) &&
         !fallbackQualityIssue;
       const allowRelaxedCoreFallback = process.env.ALLOW_RELAXED_CORE_11 === "1";
@@ -6536,7 +6537,7 @@ console.warn("[generate-crossword] ok: pool", {
           fallbackThemeEntries < fallbackMinThemeEntries ||
           fallbackCoreThematicEntries < fallbackMinCoreThematicEntries ||
           fallbackGenericContextEntries > fallbackMaxGenericContextEntries ||
-          fallbackEntryCrossingStats.weakEntries.length > 0 ||
+          !hasAcceptableCrossingCoverage(fallbackEntryCrossingStats) ||
           placeholderCount > 0 ||
           hasShortLetterRuns(fallbackGridForResponse, minEntryLenForSize(n)) ||
           fallbackQualityIssue)

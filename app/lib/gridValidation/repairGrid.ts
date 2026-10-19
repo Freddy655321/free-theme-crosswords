@@ -6,6 +6,7 @@ import {
   entryCrossingStats,
   hasShortLetterRuns,
   minCrossingsPerEntryForPublish,
+  hasAcceptableCrossingCoverage,
 } from "./validateGrid";
 
 export function gridToStrings(grid: (string | null)[][]): string[][] {
@@ -373,7 +374,7 @@ export function pruneWeakEntriesPreservingCrosses(
       (entry) => checkedCellsForEntry(entry) < minCrossingsPerEntryForPublish(grid.length)
     );
     const targets = Array.from(new Set([...weakEntries, ...duplicateEntries]));
-    if (targets.length === 0 && stats.weakEntries.length === 0) {
+    if (duplicateEntries.length === 0 && hasAcceptableCrossingCoverage(stats)) {
       return { grid: working, derived };
     }
 
@@ -435,6 +436,6 @@ export function pruneWeakEntriesPreservingCrosses(
 
   const derived = deriveEntriesFromGrid(working, minLen);
   if (derived.length < minEntries) return null;
-  if (entryCrossingStats(working, derived, minLen).weakEntries.length > 0) return null;
+  if (!hasAcceptableCrossingCoverage(entryCrossingStats(working, derived, minLen))) return null;
   return { grid: working, derived };
 }

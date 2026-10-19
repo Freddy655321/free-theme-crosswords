@@ -156,6 +156,16 @@ export function entryCrossingStats(
   };
 }
 
+// Keep weakEntries as a diagnostic for entries below two checks; acceptance
+// distinguishes a permitted single check from an invalid zero-check entry.
+export function hasAcceptableCrossingCoverage(stats: EntryCrossingStats): boolean {
+  const total = stats.counts.length;
+  const strong = stats.counts.filter((entry) => entry.checkedCells >= 2).length;
+  return total > 0 &&
+    stats.counts.every((entry) => entry.checkedCells >= 1) &&
+    strong * 5 >= total * 4;
+}
+
 export function minCrossingsPerEntryForPublish(size: number): number {
   if (size <= 11) return 2;
   return 2;
@@ -281,7 +291,7 @@ export function runGridValidation(input: GridValidationInput): GridValidationRes
   if (n === 11 && genericAnyCount > 7) return reject("too-many-generic");
 
   if (n === 11 && crossedStatsResult.crossed < minEntries) return reject("too-few-crossed");
-  if (n === 11 && entryCrossings.weakEntries.length > 0) return reject("weak-crossings");
+  if (n === 11 && !hasAcceptableCrossingCoverage(entryCrossings)) return reject("weak-crossings");
   if (n === 11 && checkedStatsResult.ratio < 0.2) return reject("low-checked-ratio");
 
   if (themeSet) {

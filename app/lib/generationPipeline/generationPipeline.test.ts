@@ -278,3 +278,17 @@ test("generationPipeline module stays independent from Next.js HTTP objects", ()
   assert.equal(source.includes("next/server"), false);
   assert.equal(source.includes("NextResponse"), false);
 });
+
+test("generation acceptance gates use the shared crossing contract", () => {
+  const source = readFileSync("app/lib/generationPipeline/runGenerationPipeline.ts", "utf8");
+  for (const stats of [
+    "bestEntryCrossingStats",
+    "cleanupEntryCrossings",
+    "directFallbackEntryCrossingStats",
+    "fallbackEntryCrossingStats",
+  ]) {
+    assert.ok(source.includes(`hasAcceptableCrossingCoverage(${stats})`));
+    assert.equal(source.includes(`${stats}.weakEntries.length === 0`), false);
+    assert.equal(source.includes(`${stats}.weakEntries.length > 0`), false);
+  }
+});
