@@ -6,6 +6,7 @@ import {
   blockShortRunsOnly,
   checkedCellStats,
   crossedEntryStats,
+  crosswordDensityFromGrid,
   entryCrossingStats,
   hasAcceptableCrossingCoverage,
   gridToStrings,
@@ -23,6 +24,44 @@ import type {
   GridEnhancementDependencies,
 } from "./gridEnhancementTypes";
 
+export const MIN_DENSITY_11 = 0.4;
+
+type GridWithDerivedEntries = {
+  grid: string[][];
+  derived: DerivedEntry[];
+};
+
+export function needsDensityRecovery11(
+  grid: string[][],
+  derived: DerivedEntry[],
+  targetEntries: number
+): boolean {
+  const minLen = minEntryLenForSize(11);
+  return (
+    derived.length >= targetEntries &&
+    hasAcceptableCrossingCoverage(entryCrossingStats(grid, derived, minLen)) &&
+    crosswordDensityFromGrid(grid) < MIN_DENSITY_11
+  );
+}
+
+export function compareCleanupCandidatesByCrossingAndDensity11(
+  a: GridWithDerivedEntries,
+  b: GridWithDerivedEntries
+): number {
+  const minLen = minEntryLenForSize(11);
+  const statsA = entryCrossingStats(a.grid, a.derived, minLen);
+  const statsB = entryCrossingStats(b.grid, b.derived, minLen);
+  const acceptableA =
+    hasAcceptableCrossingCoverage(statsA) && crosswordDensityFromGrid(a.grid) >= MIN_DENSITY_11;
+  const acceptableB =
+    hasAcceptableCrossingCoverage(statsB) && crosswordDensityFromGrid(b.grid) >= MIN_DENSITY_11;
+  if (acceptableA !== acceptableB) return acceptableA ? -1 : 1;
+  if (statsA.weakEntries.length !== statsB.weakEntries.length) {
+    return statsA.weakEntries.length - statsB.weakEntries.length;
+  }
+  return b.derived.length - a.derived.length;
+}
+
 export function densifyCleanGrid11(opts: DensifyCleanGrid11Input): DensifyCleanGrid11Result | null {
   const { theme, candidates, targetEntries, seed, deadlineMs, dependencies } = opts;
   const { isForbiddenPublishAnswer, isOverGenericThemeWordForTheme, logger } = dependencies;
@@ -38,6 +77,7 @@ export function densifyCleanGrid11(opts: DensifyCleanGrid11Input): DensifyCleanG
 
   const pruneWeakEntriesForRepair = () => {
     const stats = entryCrossingStats(grid, derived, minLen);
+    if (hasAcceptableCrossingCoverage(stats)) return false;
     if (stats.weakEntries.length === 0) return false;
     if (derived.length - stats.weakEntries.length < Math.max(8, targetEntries - 5)) return false;
 
@@ -138,7 +178,11 @@ export function densifyCleanGrid11(opts: DensifyCleanGrid11Input): DensifyCleanG
 
   let currentWeakStats = entryCrossingStats(grid, derived, minLen);
   let currentWeakEntryCount = currentWeakStats.weakEntries.length;
-  if (derived.length >= targetEntries && currentWeakEntryCount === 0) return null;
+  const needsMoreWork = () =>
+    derived.length < targetEntries ||
+    !hasAcceptableCrossingCoverage(currentWeakStats) ||
+    needsDensityRecovery11(grid, derived, targetEntries);
+  if (!needsMoreWork()) return null;
 
   const countExistingCrossings = (
     source: string[][],
@@ -172,6 +216,8 @@ export function densifyCleanGrid11(opts: DensifyCleanGrid11Input): DensifyCleanG
   };
 
   const evaluateInsertion = (word: string, row: number, col: number, dir: Direction) => {
+    const densityRecoveryStep = needsDensityRecovery11(grid, derived, targetEntries);
+    const currentLetterCellCount = checkedCellStats(grid, minLen).total;
     const currentWeakAnswers = new Set(currentWeakStats.weakEntries.map((entry) => entry.answer));
     const weakCellKeys = weakCellKeysFor(derived, currentWeakAnswers);
     const placement = countExistingCrossings(grid, word, row, col, dir, weakCellKeys);
@@ -180,7 +226,13 @@ export function densifyCleanGrid11(opts: DensifyCleanGrid11Input): DensifyCleanG
       currentWeakEntryCount > 0 &&
       placement.crossings === 1 &&
       placement.weakCrossings > 0;
-    if (placement.crossings < minCrossingsPerEntryForPublish(size) && !stagedRepair) return null;
+    if (
+      placement.crossings < minCrossingsPerEntryForPublish(size) &&
+      !stagedRepair &&
+      !densityRecoveryStep
+    ) {
+      return null;
+    }
 
     const nextGrid = grid.map((r) => r.slice());
     for (let i = 0; i < word.length; i++) {
@@ -200,28 +252,37 @@ export function densifyCleanGrid11(opts: DensifyCleanGrid11Input): DensifyCleanG
     const nextWeakEntryCount = nextWeakStats.weakEntries.length;
     const insertedEntryCrossings = nextWeakStats.counts.find((entry) => entry.answer === word);
     if (!insertedEntryCrossings) return null;
+    if (nextDerived.length >= targetEntries) {
+      if (densityRecoveryStep && !hasAcceptableCrossingCoverage(nextWeakStats)) return null;
+      if (
+        !densityRecoveryStep &&
+        insertedEntryCrossings.checkedCells < minCrossingsPerEntryForPublish(size)
+      ) {
+        return null;
+      }
+    }
+    const checked = checkedCellStats(normalizedNextGrid, minLen);
+    const letterCellGain = checked.total - currentLetterCellCount;
+    if (densityRecoveryStep && letterCellGain <= 0) return null;
+    const allowTemporaryWeakRepairStep =
+      opts.pruneWeakEntries === false && placement.weakCrossings > 0;
     if (
-      nextDerived.length >= targetEntries &&
-      insertedEntryCrossings.checkedCells < minCrossingsPerEntryForPublish(size)
+      !densityRecoveryStep &&
+      nextWeakEntryCount > currentWeakEntryCount + (allowTemporaryWeakRepairStep ? 1 : 0)
     ) {
       return null;
     }
-    const allowTemporaryWeakRepairStep =
-      opts.pruneWeakEntries === false && placement.weakCrossings > 0;
-    if (nextWeakEntryCount > currentWeakEntryCount + (allowTemporaryWeakRepairStep ? 1 : 0)) {
-      return null;
-    }
     if (
+      !densityRecoveryStep &&
       nextDerived.length <= derived.length &&
       nextWeakEntryCount >= currentWeakEntryCount &&
       !(allowTemporaryWeakRepairStep && nextWeakEntryCount <= currentWeakEntryCount)
     ) {
       return null;
     }
-
-    const checked = checkedCellStats(normalizedNextGrid, minLen);
     const thematicCount = nextDerived.filter((entry) => thematicAnswers.has(entry.answer)).length;
     const score =
+      (densityRecoveryStep ? letterCellGain * 10_000 : 0) +
       (currentWeakEntryCount - nextWeakEntryCount) * 8000 +
       (nextDerived.length - derived.length) * 5000 +
       thematicCount * 900 +
@@ -243,7 +304,7 @@ export function densifyCleanGrid11(opts: DensifyCleanGrid11Input): DensifyCleanG
 
   for (
     let round = 0;
-    round < 12 && nowOk() && (derived.length < targetEntries || currentWeakEntryCount > 0);
+    round < 12 && nowOk() && needsMoreWork();
     round++
   ) {
     let best:

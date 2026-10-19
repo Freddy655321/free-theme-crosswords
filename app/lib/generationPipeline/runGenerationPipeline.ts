@@ -61,6 +61,7 @@ import {
 } from "@/app/lib/gridReconstruction";
 import {
   augmentNoShortGridWithCandidates as augmentNoShortGridWithCandidatesWithDependencies,
+  compareCleanupCandidatesByCrossingAndDensity11,
   densifyCleanGrid11 as densifyCleanGrid11WithDependencies,
   extendGridWithCrossedPair11 as extendGridWithCrossedPair11WithDependencies,
 } from "@/app/lib/gridEnhancement";
@@ -2323,12 +2324,7 @@ console.warn("[generate-crossword] ok: pool", {
               .filter((candidate): candidate is { grid: string[][]; derived: DerivedEntry[]; added: string[]; meta: Record<string, unknown> } =>
                 Boolean(candidate)
               )
-              .sort((a, b) => {
-                const weakA = entryCrossingStats(a.grid, a.derived, minEntryLenForSize(n)).weakEntries.length;
-                const weakB = entryCrossingStats(b.grid, b.derived, minEntryLenForSize(n)).weakEntries.length;
-                if (weakA !== weakB) return weakA - weakB;
-                return b.derived.length - a.derived.length;
-              })[0] ?? null;
+              .sort(compareCleanupCandidatesByCrossingAndDensity11)[0] ?? null;
 
           if (cleanedOrDensified) {
             const clueByAnswer = new Map<string, string>();

@@ -4,8 +4,10 @@ import type { WordCandidate } from "@/app/lib/crosswordTypes";
 import { deriveEntriesFromGrid } from "@/app/lib/publishPipeline";
 import {
   augmentNoShortGridWithCandidates,
+  compareCleanupCandidatesByCrossingAndDensity11,
   densifyCleanGrid11,
   extendGridWithCrossedPair11,
+  needsDensityRecovery11,
 } from "./gridEnhancement";
 import type { GridEnhancementDependencies } from "./gridEnhancementTypes";
 
@@ -51,6 +53,36 @@ function candidates(answers: Array<[string, boolean?, WordCandidate["source"]?]>
     thematic,
     source,
   }));
+}
+
+function letterCellCount(grid: string[][]): number {
+  return grid.flat().filter((cell) => cell !== "#").length;
+}
+
+function crossingLattice(): string[][] {
+  let grid = emptyGrid();
+  grid = withAcross(grid, 1, 2, "ABCDEFG");
+  grid = withAcross(grid, 4, 2, "HIJKLMN");
+  grid = withAcross(grid, 7, 2, "OPQRSTU");
+  grid = withDown(grid, 1, 2, "AVWHXYO");
+  grid = withDown(grid, 1, 5, "DABKCDR");
+  return withDown(grid, 1, 8, "GEFNGHU");
+}
+
+function denseCrossingFixture(): string[][] {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const grid = Array.from({ length: 11 }, (_, row) =>
+    Array.from({ length: 11 }, (_, col) =>
+      row % 2 === 0 ? alphabet[(row * 11 + col) % alphabet.length] : "#"
+    )
+  );
+  [2, 2, 2, 2, 1].forEach((count, gap) => {
+    const columns = gap % 2 === 0 ? [0, 4, 8] : [2, 6, 10];
+    columns.slice(0, count).forEach((col) => {
+      grid[gap * 2 + 1][col] = alphabet[((gap * 2 + 1) * 11 + col) % alphabet.length];
+    });
+  });
+  return grid;
 }
 
 describe("gridEnhancement", () => {
@@ -106,6 +138,88 @@ describe("gridEnhancement", () => {
     assert.ok(result);
     assert.deepEqual(result.added, ["XCY"]);
     assert.ok(result.derived.some((entry) => entry.answer === "XCY"));
+  });
+
+  it("continues a crossing-acceptable grid solely to recover density", () => {
+    const grid = crossingLattice();
+    const derived = deriveEntriesFromGrid(grid, 3);
+    assert.equal(derived.length, 6);
+    assert.equal(needsDensityRecovery11(grid, derived, 6), true);
+
+    const result = densifyCleanGrid11({
+      theme: "Neutral",
+      grid,
+      candidates: candidates([["PXY"]]),
+      targetEntries: 6,
+      seed: 123,
+      pruneWeakEntries: false,
+      dependencies: makeDependencies(),
+    });
+
+    assert.ok(result);
+    assert.deepEqual(result.added, ["PXY"]);
+    assert.equal(result.derived.length, 7);
+    assert.ok(letterCellCount(result.grid) > letterCellCount(grid));
+  });
+
+  it("admits real letter-cell growth with permitted singles but rejects below-80% growth", () => {
+    const grid = crossingLattice();
+    const result = densifyCleanGrid11({
+      theme: "Neutral",
+      grid,
+      candidates: candidates([["PXY"], ["SZA"]]),
+      targetEntries: 6,
+      seed: 123,
+      pruneWeakEntries: false,
+      dependencies: makeDependencies(),
+    });
+
+    assert.ok(result);
+    assert.equal(result.added.length, 1);
+    assert.equal(result.derived.length, 7);
+  });
+
+  it("does not treat density as unfinished after the production threshold", () => {
+    const grid = Array.from({ length: 11 }, (_, row) =>
+      Array.from({ length: 11 }, (_, col) => String.fromCharCode(65 + ((row + col) % 26)))
+    );
+    const derived = deriveEntriesFromGrid(grid, 3);
+    assert.equal(needsDensityRecovery11(grid, derived, 15), false);
+    assert.equal(
+      densifyCleanGrid11({
+        theme: "Neutral",
+        grid,
+        candidates: candidates([["XYZ"]]),
+        targetEntries: 15,
+        seed: 123,
+        dependencies: makeDependencies(),
+      }),
+      null
+    );
+  });
+
+  it("cleanup prefers current crossing acceptance plus density over raw weak count", () => {
+    const dense = denseCrossingFixture();
+    const sparse = crossingLattice();
+    const denseCandidate = { grid: dense, derived: deriveEntriesFromGrid(dense, 3) };
+    const sparseCandidate = { grid: sparse, derived: deriveEntriesFromGrid(sparse, 3) };
+
+    assert.equal(compareCleanupCandidatesByCrossingAndDensity11(denseCandidate, sparseCandidate), -1);
+    assert.equal(compareCleanupCandidatesByCrossingAndDensity11(sparseCandidate, denseCandidate), 1);
+  });
+
+  it("cleanup does not treat density as acceptable when crossing coverage fails", () => {
+    const validGrid = denseCrossingFixture();
+    const validCandidate = { grid: validGrid, derived: deriveEntriesFromGrid(validGrid, 3) };
+    const invalidCandidate = {
+      grid: validGrid,
+      derived: [
+        ...validCandidate.derived.slice(1),
+        { answer: "XYZ", row: 1, col: 7, direction: "across" as const, number: 1 },
+      ],
+    };
+
+    assert.equal(compareCleanupCandidatesByCrossingAndDensity11(validCandidate, invalidCandidate), -1);
   });
 
   it("densify returns null for no-op candidate sets", () => {
