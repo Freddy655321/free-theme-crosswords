@@ -1635,13 +1635,22 @@ function orderValues(
     })
     .sort((a, b) => {
       budget.step();
-      if (a.remainingOptions !== b.remainingOptions) return b.remainingOptions - a.remainingOptions;
-      if (a.candidate.thematic !== b.candidate.thematic) return a.candidate.thematic ? -1 : 1;
-      const seeded = seededTieBreak(a.candidate.answer, seed) - seededTieBreak(b.candidate.answer, seed);
-      if (seeded !== 0) return seeded;
-      return a.candidate.answer.localeCompare(b.candidate.answer);
+      return compareCspValuePriority(a, b, seed);
     })
     .map(item => { budget.step(); return item.candidate; });
+}
+
+/** Thematic provenance changes visit order, never the feasible domain. */
+export function compareCspValuePriority(
+  a: { candidate: { answer: string; thematic: boolean }; remainingOptions: number },
+  b: { candidate: { answer: string; thematic: boolean }; remainingOptions: number },
+  seed: number
+): number {
+  if (a.candidate.thematic !== b.candidate.thematic) return a.candidate.thematic ? -1 : 1;
+  if (a.remainingOptions !== b.remainingOptions) return b.remainingOptions - a.remainingOptions;
+  const seeded = seededTieBreak(a.candidate.answer, seed) - seededTieBreak(b.candidate.answer, seed);
+  if (seeded !== 0) return seeded;
+  return a.candidate.answer.localeCompare(b.candidate.answer);
 }
 
 function countAssignedKinds(
