@@ -1,3 +1,4 @@
+import { CspCandidateIndex, CspCandidateDomain, CspDomainBudget, CspDomainDeadline } from "./cspCandidateDomains";
 import {
   CspSearchCausalitySummary11,
   summarizeCspSearchCausality11,
@@ -597,12 +598,15 @@ function openCellsAreConnected(pattern: string[], openCells: CrosswordCell[]): b
 
 export function prepareCandidateDomains(
   slots: CrosswordSlot[],
-  candidates: CspCandidate[]
+  candidates: CspCandidate[],
+  budget?: CspDomainBudget
 ): PreparedCandidateDomains {
+  budget?.check();
   const neededLengths = new Set(slots.map((slot) => slot.length));
   const candidatesByAnswer = new Map<string, PreparedCandidate>();
 
   for (const candidate of candidates) {
+    budget?.step();
     const answer = normalizeCandidateAnswer(candidate.answer);
     if (!answer || !ANSWER_RE.test(answer)) continue;
     if (!neededLengths.has(answer.length)) continue;
@@ -630,17 +634,19 @@ export function prepareCandidateDomains(
 
   const byLength = new Map<number, PreparedCandidate[]>();
   for (const candidate of candidatesByAnswer.values()) {
+    budget?.step();
     const bucket = byLength.get(candidate.answer.length) ?? [];
     bucket.push(candidate);
     byLength.set(candidate.answer.length, bucket);
   }
 
   for (const bucket of byLength.values()) {
-    bucket.sort(compareCandidatesDeterministic);
+    bucket.sort((a, b) => { budget?.step(); return compareCandidatesDeterministic(a, b); });
   }
 
   const domainsBySlotId = new Map<string, PreparedCandidate[]>();
   for (const slot of slots) {
+    budget?.check();
     domainsBySlotId.set(slot.id, [...(byLength.get(slot.length) ?? [])]);
   }
 
@@ -655,6 +661,7 @@ export function solveCrosswordPattern11(opts: {
   seed?: number;
   minThematicEntries?: number;
   targetThematicEntries?: number;
+  cancelled?: () => boolean;
 }): CspBuildResult | null {
   return solveCrosswordPattern11WithReport(opts).result;
 }
@@ -667,6 +674,7 @@ export function solveCrosswordPattern11WithReport(opts: {
   seed?: number;
   minThematicEntries?: number;
   targetThematicEntries?: number;
+  cancelled?: () => boolean;
 }): CspSolveReport {
   const startedAt = Date.now();
   const validation = validatePattern11(opts.pattern);
@@ -719,9 +727,10 @@ export function solveCrosswordPattern11WithReport(opts: {
 
   const slots = validation.slots;
   const slotById = new Map(slots.map((slot) => [slot.id, slot]));
-  const prepared = prepareCandidateDomains(slots, opts.candidates);
+
   const maxNodes = opts.maxNodes ?? 250_000;
   const deadlineAt = opts.deadlineMs ? startedAt + opts.deadlineMs : Number.POSITIVE_INFINITY;
+  const budget = new CspDomainBudget(deadlineAt, opts.cancelled);
   const seed = opts.seed ?? 0;
   const minThematicEntries = opts.minThematicEntries ?? 0;
   let firstPropagationConflict: CspPropagationConflict11 | null = null;
@@ -749,7 +758,25 @@ export function solveCrosswordPattern11WithReport(opts: {
   let mrvTieSelections = 0;
   let mrvDegreeTieBreakUses = 0;
 
-  if (slots.some((slot) => (prepared.domainsBySlotId.get(slot.id) ?? []).length === 0)) {
+  let prepared: PreparedCandidateDomains;
+  let indexedDomains: Map<string, CspCandidateDomain<PreparedCandidate>>;
+  try {
+    prepared = prepareCandidateDomains(slots, opts.candidates, budget);
+    const index = new CspCandidateIndex([...prepared.byLength.values()].flat(), normalizeCandidateAnswer, budget);
+    indexedDomains = new Map(slots.map(slot => [slot.id, index.domain(slot.length)]));
+    // Public preparation remains array-compatible; search keeps only shared ID domains.
+    prepared.domainsBySlotId.clear();
+    prepared.byLength.clear();
+    for (const answer of prepared.candidatesByAnswer.keys()) {
+      budget.step();
+      prepared.candidatesByAnswer.set(answer, index.candidate(index.id(answer)!));
+    }
+  } catch (error) {
+    if (!(error instanceof CspDomainDeadline)) throw error;
+    return { result: null, failureReason: "deadline", stats: baseStats(), issues: [] };
+  }
+
+  if (slots.some((slot) => indexedDomains.get(slot.id)!.length === 0)) {
     return {
       result: null,
       failureReason: "initial-empty-domain",
@@ -762,13 +789,16 @@ export function solveCrosswordPattern11WithReport(opts: {
     };
   }
 
-  const solved = search({
-    assignments: {},
-    domains: prepared.domainsBySlotId,
-    usedAnswers: new Set<string>(),
-    thematicCount: 0,
-    path: [],
-  });
+  let solved: { assignments: Record<string, string> } | null;
+  try {
+    solved = search({
+      assignments: {}, domains: indexedDomains, usedAnswers: new Set<string>(), thematicCount: 0, path: [],
+    });
+  } catch (error) {
+    if (!(error instanceof CspDomainDeadline)) throw error;
+    stoppedBy = "deadline";
+    solved = null;
+  }
 
   if (!solved) {
     const failureReason = stoppedBy ?? (firstPropagationConflict ? "propagation-empty-domain" : "search-exhausted");
@@ -822,11 +852,12 @@ export function solveCrosswordPattern11WithReport(opts: {
 
   function search(state: {
     assignments: Record<string, string>;
-    domains: Map<string, PreparedCandidate[]>;
+    domains: Map<string, CspCandidateDomain<PreparedCandidate>>;
     usedAnswers: Set<string>;
     thematicCount: number;
     path: CspBestProgressState11["decisionPath"];
   }): { assignments: Record<string, string> } | null {
+    budget.check();
     if (Date.now() > deadlineAt) {
       stoppedBy = "deadline";
       return null;
@@ -893,6 +924,7 @@ export function solveCrosswordPattern11WithReport(opts: {
     profile.branchingFactorSamples++;
 
     for (let ordinal = 0; ordinal < values.length; ordinal++) {
+      budget.check();
       const candidate = values[ordinal] as PreparedCandidate;
       const slotStat = getSlotStats(selected);
       const candidateStat = getCandidateStats(candidate);
@@ -1048,7 +1080,7 @@ export function solveCrosswordPattern11WithReport(opts: {
     candidate: PreparedCandidate,
     domainSizeBefore: number,
     assignments: Record<string, string>,
-    domains: Map<string, PreparedCandidate[]>
+    domains: Map<string, CspCandidateDomain<PreparedCandidate>>
   ): MutableEarlyDecisionStats {
     const key = `${depth}:${slot.id}:${candidate.answer}`;
     const existing = earlyDecisionStatsByKey.get(key);
@@ -1087,14 +1119,14 @@ export function solveCrosswordPattern11WithReport(opts: {
     depth: number,
     domainSize: number,
     assignments: Record<string, string>,
-    domains: Map<string, PreparedCandidate[]>,
+    domains: Map<string, CspCandidateDomain<PreparedCandidate>>,
     usedAnswers: Set<string>
   ): void {
     const neighborIds = [...new Set(slot.intersections.map((intersection) => intersection.otherSlotId))].filter(
       (slotId) => !assignments[slotId]
     );
-    const neighborDomainSum = neighborIds.reduce((sum, slotId) => sum + (domains.get(slotId) ?? []).length, 0);
-    const domain = domains.get(slot.id) ?? [];
+    const neighborDomainSum = neighborIds.reduce((sum, slotId) => sum + domains.get(slotId)!.length, 0);
+    const domain = domains.get(slot.id)!;
     const selection = {
       depth,
       slotId: slot.id,
@@ -1190,7 +1222,7 @@ export function solveCrosswordPattern11WithReport(opts: {
   function captureBestProgressState(
     state: {
       assignments: Record<string, string>;
-      domains: Map<string, PreparedCandidate[]>;
+      domains: Map<string, CspCandidateDomain<PreparedCandidate>>;
       thematicCount: number;
       path: CspBestProgressState11["decisionPath"];
     },
@@ -1199,7 +1231,7 @@ export function solveCrosswordPattern11WithReport(opts: {
     const remaining = slots
       .filter((slot) => !state.assignments[slot.id])
       .map((slot) => {
-        const domain = state.domains.get(slot.id) ?? [];
+        const domain = state.domains.get(slot.id)!;
         return {
           slotId: slot.id,
           size: domain.length,
@@ -1256,12 +1288,12 @@ export function solveCrosswordPattern11WithReport(opts: {
 
   function countRemovedFromNeighborDomains(
     slot: CrosswordSlot,
-    before: Map<string, PreparedCandidate[]>,
-    after: Map<string, PreparedCandidate[]>
+    before: Map<string, CspCandidateDomain<PreparedCandidate>>,
+    after: Map<string, CspCandidateDomain<PreparedCandidate>>
   ): number {
     let removed = 0;
     for (const intersection of slot.intersections) {
-      removed += Math.max(0, (before.get(intersection.otherSlotId) ?? []).length - (after.get(intersection.otherSlotId) ?? []).length);
+      removed += Math.max(0, before.get(intersection.otherSlotId)!.length - after.get(intersection.otherSlotId)!.length);
     }
     return removed;
   }
@@ -1269,11 +1301,11 @@ export function solveCrosswordPattern11WithReport(opts: {
   function countRemainingNeighborDomain(
     slot: CrosswordSlot,
     assignments: Record<string, string>,
-    domains: Map<string, PreparedCandidate[]>
+    domains: Map<string, CspCandidateDomain<PreparedCandidate>>
   ): number {
     return [...new Set(slot.intersections.map((intersection) => intersection.otherSlotId))]
       .filter((slotId) => !assignments[slotId])
-      .reduce((sum, slotId) => sum + (domains.get(slotId) ?? []).length, 0);
+      .reduce((sum, slotId) => sum + domains.get(slotId)!.length, 0);
   }
 
   function buildCausalityDiagnostics(solved: boolean): CspSearchCausalityDiagnostics11 {
@@ -1482,6 +1514,7 @@ export function buildCspCrossword11(opts: {
   seed?: number;
   minThematicEntries?: number;
   targetThematicEntries?: number;
+  cancelled?: () => boolean;
 }): CspBuildResult | null {
   return solveCrosswordPattern11(opts);
 }
@@ -1491,41 +1524,38 @@ function compareCandidatesDeterministic(a: PreparedCandidate, b: PreparedCandida
   return a.answer.localeCompare(b.answer);
 }
 
-function compatibleWithAssignments(
+function currentCompatibleDomain(
   slot: CrosswordSlot,
-  candidate: PreparedCandidate,
   assignments: Record<string, string>,
+  domains: Map<string, CspCandidateDomain<PreparedCandidate>>,
+  usedAnswers: Set<string>,
   slotById: Map<string, CrosswordSlot>
-): boolean {
-  for (const intersection of slot.intersections) {
-    const otherAnswer = assignments[intersection.otherSlotId];
-    if (!otherAnswer) continue;
-    const otherSlot = slotById.get(intersection.otherSlotId);
-    if (!otherSlot) return false;
-    if (candidate.answer[intersection.ownIndex] !== otherAnswer[intersection.otherIndex]) {
-      return false;
-    }
+): CspCandidateDomain<PreparedCandidate> {
+  let domain = domains.get(slot.id)!.exclude(usedAnswers);
+  for (const crossing of slot.intersections) {
+    const answer = assignments[crossing.otherSlotId];
+    if (!answer) continue;
+    if (!slotById.has(crossing.otherSlotId)) return domain.filter(() => false);
+    domain = domain.matching(crossing.ownIndex, answer[crossing.otherIndex]);
   }
-  return true;
+  return domain;
 }
 
 function countCurrentCompatibleDomain(
   slot: CrosswordSlot,
   assignments: Record<string, string>,
-  domains: Map<string, PreparedCandidate[]>,
+  domains: Map<string, CspCandidateDomain<PreparedCandidate>>,
   usedAnswers: Set<string>,
   slotById: Map<string, CrosswordSlot>
 ): number {
-  return (domains.get(slot.id) ?? []).filter(
-    (candidate) => !usedAnswers.has(candidate.answer) && compatibleWithAssignments(slot, candidate, assignments, slotById)
-  ).length;
+  return currentCompatibleDomain(slot, assignments, domains, usedAnswers, slotById).length;
 }
 
 function selectNextSlot(
   slots: CrosswordSlot[],
   slotById: Map<string, CrosswordSlot>,
   assignments: Record<string, string>,
-  domains: Map<string, PreparedCandidate[]>,
+  domains: Map<string, CspCandidateDomain<PreparedCandidate>>,
   usedAnswers: Set<string>,
   profile?: {
     mrvCalls: number;
@@ -1541,12 +1571,8 @@ function selectNextSlot(
   for (const slot of slots) {
     if (assignments[slot.id]) continue;
 
-    const compatible = (domains.get(slot.id) ?? []).filter(
-      (candidate) => {
-        if (profile) profile.constraintChecks++;
-        return !usedAnswers.has(candidate.answer) && compatibleWithAssignments(slot, candidate, assignments, slotById);
-      }
-    );
+    if (profile) profile.constraintChecks += domains.get(slot.id)!.length;
+    const compatible = currentCompatibleDomain(slot, assignments, domains, usedAnswers, slotById);
 
     if (compatible.length === 0) return null;
 
@@ -1575,7 +1601,7 @@ function selectNextSlot(
 function orderValues(
   slot: CrosswordSlot,
   assignments: Record<string, string>,
-  domains: Map<string, PreparedCandidate[]>,
+  domains: Map<string, CspCandidateDomain<PreparedCandidate>>,
   usedAnswers: Set<string>,
   seed: number,
   slotById: Map<string, CrosswordSlot>,
@@ -1585,25 +1611,37 @@ function orderValues(
   }
 ): PreparedCandidate[] {
   if (profile) profile.valueOrderingCalls++;
-  return (domains.get(slot.id) ?? [])
-    .filter(
-      (candidate) => {
-        if (profile) profile.constraintChecks++;
-        return !usedAnswers.has(candidate.answer) && compatibleWithAssignments(slot, candidate, assignments, slotById);
+  const budget = domains.get(slot.id)!.index.budget;
+  // Count neighbor support once, retaining exactly the former value-ordering score.
+  const supports = slot.intersections.flatMap(crossing => {
+    if (assignments[crossing.otherSlotId]) return [];
+    const other = slotById.get(crossing.otherSlotId);
+    if (!other) return [];
+    const domain = currentCompatibleDomain(other, assignments, domains, usedAnswers, slotById);
+    return [{ crossing, domain, counts: domain.letterCounts(crossing.otherIndex) }];
+  });
+  if (profile) profile.constraintChecks += domains.get(slot.id)!.length;
+  return currentCompatibleDomain(slot, assignments, domains, usedAnswers, slotById)
+    .map(candidate => {
+      let remainingOptions = 0;
+      for (const { crossing, domain, counts } of supports) {
+        budget.step();
+        const needed = candidate.answer[crossing.ownIndex];
+        remainingOptions += counts.get(needed) ?? 0;
+        const id = domain.index.id(candidate.answer);
+        if (id !== undefined && domain.has(id) && candidate.answer[crossing.otherIndex] === needed) remainingOptions--;
       }
-    )
-    .map((candidate) => ({
-      candidate,
-      remainingOptions: estimateRemainingOptions(slot, candidate, assignments, domains, usedAnswers, slotById),
-    }))
+      return { candidate, remainingOptions };
+    })
     .sort((a, b) => {
+      budget.step();
       if (a.remainingOptions !== b.remainingOptions) return b.remainingOptions - a.remainingOptions;
       if (a.candidate.thematic !== b.candidate.thematic) return a.candidate.thematic ? -1 : 1;
       const seeded = seededTieBreak(a.candidate.answer, seed) - seededTieBreak(b.candidate.answer, seed);
       if (seeded !== 0) return seeded;
       return a.candidate.answer.localeCompare(b.candidate.answer);
     })
-    .map((item) => item.candidate);
+    .map(item => { budget.step(); return item.candidate; });
 }
 
 function countAssignedKinds(
@@ -1627,33 +1665,6 @@ function countAssignedKinds(
   };
 }
 
-function estimateRemainingOptions(
-  slot: CrosswordSlot,
-  candidate: PreparedCandidate,
-  assignments: Record<string, string>,
-  domains: Map<string, PreparedCandidate[]>,
-  usedAnswers: Set<string>,
-  slotById: Map<string, CrosswordSlot>
-): number {
-  let total = 0;
-
-  for (const intersection of slot.intersections) {
-    if (assignments[intersection.otherSlotId]) continue;
-    const otherSlot = slotById.get(intersection.otherSlotId);
-    if (!otherSlot) continue;
-    const needed = candidate.answer[intersection.ownIndex];
-    total += (domains.get(otherSlot.id) ?? []).filter(
-      (otherCandidate) =>
-        otherCandidate.answer !== candidate.answer &&
-        !usedAnswers.has(otherCandidate.answer) &&
-        otherCandidate.answer[intersection.otherIndex] === needed &&
-        compatibleWithAssignments(otherSlot, otherCandidate, assignments, slotById)
-    ).length;
-  }
-
-  return total;
-}
-
 function seededTieBreak(value: string, seed: number): number {
   let hash = seed >>> 0;
   for (let i = 0; i < value.length; i++) {
@@ -1665,7 +1676,7 @@ function seededTieBreak(value: string, seed: number): number {
 function forwardCheck(
   slot: CrosswordSlot,
   candidate: PreparedCandidate,
-  domains: Map<string, PreparedCandidate[]>,
+  domains: Map<string, CspCandidateDomain<PreparedCandidate>>,
   assignments: Record<string, string>,
   usedAnswers: Set<string>,
   slotById: Map<string, CrosswordSlot>,
@@ -1678,9 +1689,9 @@ function forwardCheck(
     domainValuesRemoved: number;
     domainWipeouts: number;
   }
-): { domains: Map<string, PreparedCandidate[]> } | { conflict: CspPropagationConflict11 } | null {
+): { domains: Map<string, CspCandidateDomain<PreparedCandidate>> } | { conflict: CspPropagationConflict11 } | null {
   const propagationStart = Date.now();
-  const nextDomains = new Map<string, PreparedCandidate[]>();
+  const nextDomains = new Map<string, CspCandidateDomain<PreparedCandidate>>();
   for (const [slotId, domain] of domains) {
     nextDomains.set(slotId, domain);
   }
@@ -1692,14 +1703,12 @@ function forwardCheck(
 
   const affectedSlotIds = new Set(slot.intersections.map((intersection) => intersection.otherSlotId));
   for (const slotId of affectedSlotIds) {
-    const domain = nextDomains.get(slotId) ?? [];
+    const domain = nextDomains.get(slotId)!;
     if (slotId === slot.id) continue;
     if (assignments[slotId]) continue;
 
-    let filtered = domain.filter((item) => {
-      if (localProfile) localProfile.constraintChecks++;
-      return item.answer !== candidate.answer && !usedAnswers.has(item.answer);
-    });
+    if (localProfile) localProfile.constraintChecks += domain.length;
+    let filtered = domain.exclude(new Set([...usedAnswers, candidate.answer]));
 
     const otherSlot = slotById.get(slotId);
     if (!otherSlot) return null;
@@ -1711,10 +1720,8 @@ function forwardCheck(
       if (intersection.otherSlotId !== slotId) continue;
       const needed = candidate.answer[intersection.ownIndex];
       const before = filtered.length;
-      filtered = filtered.filter((item) => {
-        if (localProfile) localProfile.constraintChecks++;
-        return item.answer[intersection.otherIndex] === needed;
-      });
+      if (localProfile) localProfile.constraintChecks += filtered.length;
+      filtered = filtered.matching(intersection.otherIndex, needed);
       if (localProfile) localProfile.domainValuesRemoved += before - filtered.length;
       reductions.push({
         position: intersection.otherIndex,
@@ -1729,10 +1736,8 @@ function forwardCheck(
       if (!otherAnswer) continue;
       const needed = otherAnswer[intersection.otherIndex];
       const before = filtered.length;
-      filtered = filtered.filter((item) => {
-        if (localProfile) localProfile.constraintChecks++;
-        return item.answer[intersection.ownIndex] === needed;
-      });
+      if (localProfile) localProfile.constraintChecks += filtered.length;
+      filtered = filtered.matching(intersection.ownIndex, needed);
       if (localProfile) localProfile.domainValuesRemoved += before - filtered.length;
       reductions.push({
         position: intersection.ownIndex,
