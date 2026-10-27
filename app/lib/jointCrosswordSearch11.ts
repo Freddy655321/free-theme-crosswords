@@ -6,6 +6,8 @@ import { deriveEntriesFromGrid } from "./publishPipeline/deriveEntries";
 import { runGridValidation, minPublishEntriesForSize } from "./gridValidation/validateGrid";
 import type { GridValidationPolicies } from "./gridValidation/gridValidationTypes";
 import type { PlaceWordPolicies } from "./gridConstruction/gridConstructionTypes";
+import { jointQualityIssue, summarizeJointQuality, validGeneralScore, validJointQualityPolicy,
+  type JointQualityPolicy } from "./jointSearchQuality11";
 import {
   closeCrossingOpportunity, commitJointPlacement, emptyJointState, newPlacementDomainMetrics,
   propagateJointDomains, type JointCandidate, type JointState, type OpportunityDomain,
@@ -19,6 +21,8 @@ export type JointSearchOptions = {
   deadlineMs: number;
   seed: number;
   policies: JointPolicies;
+  /** Opt-in keeps the Ticket 81 feasibility API available for controls. */
+  qualityPolicy?: Readonly<JointQualityPolicy>;
   cancelled?: () => boolean;
 };
 
@@ -41,6 +45,7 @@ function connectedLetters(grid: string[][]): boolean {
 /** A painted copy is a candidate terminal, never a topology planning stage. */
 export function validateJointTerminal(
   state: JointState,index:CspCandidateIndex<JointCandidate>,target:number,policies:JointPolicies,
+  qualityPolicy?: Readonly<JointQualityPolicy>,
 ) {
   index.budget.check();
   const grid=state.grid.map(row=>row.map(cell=>cell||"#"));
@@ -63,9 +68,20 @@ export function validateJointTerminal(
   agrees=agrees&&identities.size===state.usedIds.size&&thematicCount===state.thematicCount;
   const connected=connectedLetters(grid);
   const validation=runGridValidation({grid,derived:entries,policies});
-  const reason=!agrees?"derivation-mismatch":!connected?"disconnected":thematicCount<target?"thematic-target":validation.issue;
+  const quality=summarizeJointQuality(composition.map(item=>item.candidate),qualityPolicy?.lowScoreThreshold);
+  const reason=!agrees?"derivation-mismatch":!connected?"disconnected":thematicCount<target?"thematic-target":
+    validation.issue ?? (qualityPolicy ? jointQualityIssue(quality,qualityPolicy,true) : null);
   index.budget.check();
-  return {accepted:reason===null,reason,grid,entries,composition,thematicCount,connected,derivationAgrees:agrees,validation};
+  return {accepted:reason===null,reason,grid,entries,composition,thematicCount,connected,derivationAgrees:agrees,validation,quality};
+}
+
+export function compareJointQualityValues(a:Readonly<JointCandidate>,b:Readonly<JointCandidate>,seed:number):number {
+  if(a.thematic!==b.thematic) return a.thematic?-1:1;
+  if(!a.thematic) {
+    const scoreA=validGeneralScore(a.score)?a.score:-1,scoreB=validGeneralScore(b.score)?b.score:-1;
+    if(scoreA!==scoreB) return scoreB-scoreA;
+  }
+  return compareCspValuePriority({candidate:a,remainingOptions:0},{candidate:b,remainingOptions:0},seed);
 }
 
 export function selectJointOpportunity(domains:OpportunityDomain[]):OpportunityDomain|null {
@@ -90,6 +106,7 @@ export function runJointCrosswordSearch11(opts:JointSearchOptions) {
   const metrics={nodes:0,backtracks:0,deepestPlacedEntries:0,alternativesConsidered:0,
     propagationCalls:0,mandatoryDomainWipeouts:0,transitionRejections:0,closureBranches:0,
     thematicBoundPrunes:0,terminalStatesTested:0,terminalRejections:{} as Record<string,number>,
+    qualityPrunes:{} as Record<string,number>,
     generalPlacementsBeforeTarget:0,domains:newPlacementDomainMetrics()};
   let index:CspCandidateIndex<JointCandidate>|null=null;
   let bestState=emptyJointState();
@@ -99,7 +116,8 @@ export function runJointCrosswordSearch11(opts:JointSearchOptions) {
   const finish=()=>({termination,result,bestState,metrics,indexConstructionMs:indexMs,
     engineElapsedMs:Date.now()-searchStarted,totalElapsedMs:Date.now()-started,indexSize:index?.size??0});
   if(!Number.isInteger(opts.targetThematicEntries)||opts.targetThematicEntries<0||
-    !Number.isInteger(opts.maxNodes)||opts.maxNodes<0||!Number.isFinite(opts.deadlineMs)||opts.deadlineMs<0) {
+    !Number.isInteger(opts.maxNodes)||opts.maxNodes<0||!Number.isFinite(opts.deadlineMs)||opts.deadlineMs<0||
+    (opts.qualityPolicy && !validJointQualityPolicy(opts.qualityPolicy))) {
     termination="invalid-input";return finish();
   }
   try {
@@ -116,6 +134,7 @@ export function runJointCrosswordSearch11(opts:JointSearchOptions) {
     }
     const compareIds=(a:number,b:number)=>{
       budget.step();
+      if(opts.qualityPolicy) return compareJointQualityValues(source.candidate(a),source.candidate(b),opts.seed);
       return compareCspValuePriority({candidate:source.candidate(a),remainingOptions:0},
         {candidate:source.candidate(b),remainingOptions:0},opts.seed);
     };
@@ -127,12 +146,17 @@ export function runJointCrosswordSearch11(opts:JointSearchOptions) {
     };
     const search=(state:JointState):boolean=>{
       enter(state);
+      if(opts.qualityPolicy) {
+        const quality=summarizeJointQuality(state.placed.map(p=>source.candidate(p.candidateId)),opts.qualityPolicy.lowScoreThreshold);
+        const issue=jointQualityIssue(quality,opts.qualityPolicy,false);
+        if(issue) {metrics.qualityPrunes[issue]=(metrics.qualityPrunes[issue]??0)+1;return false;}
+      }
       // This deliberately optimistic bound never assumes unseen future opportunities are absent.
       const unusedThematic=thematicAvailable-state.thematicCount;
       if(state.thematicCount+unusedThematic<opts.targetThematicEntries) {metrics.thematicBoundPrunes++;return false;}
       if(state.placed.length>=minPublishEntriesForSize(11)&&state.thematicCount>=opts.targetThematicEntries) {
         metrics.terminalStatesTested++;
-        const terminal=validateJointTerminal(state,source,opts.targetThematicEntries,opts.policies);
+        const terminal=validateJointTerminal(state,source,opts.targetThematicEntries,opts.policies,opts.qualityPolicy);
         if(terminal.accepted) {result=terminal;return true;}
         const reason=terminal.reason??"unknown";
         metrics.terminalRejections[reason]=(metrics.terminalRejections[reason]??0)+1;

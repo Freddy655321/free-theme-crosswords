@@ -3,11 +3,14 @@ import test from "node:test";
 import { CspCandidateIndex } from "./cspCandidateDomains";
 import { normalizeCspAnswer11 } from "./crosswordCspAdapter11";
 import { compareCspValuePriority } from "./crosswordCsp11";
-import { runJointCrosswordSearch11,validateJointTerminal,selectJointOpportunity } from "./jointCrosswordSearch11";
+import { runJointCrosswordSearch11,validateJointTerminal,selectJointOpportunity,compareJointQualityValues } from "./jointCrosswordSearch11";
+import { DEFAULT_JOINT_QUALITY_POLICY, jointQualityIssue, summarizeJointQuality } from "./jointSearchQuality11";
 import { commitJointPlacement,emptyJointState,type JointCandidate } from "./jointPlacementDomains11";
 import { deriveEntriesFromGrid } from "./publishPipeline/deriveEntries";
 import { runGridValidation } from "./gridValidation/validateGrid";
 import * as validationModule from "./gridValidation/validateGrid";
+import * as qualityModule from "./jointSearchQuality11";
+import * as placementModule from "./jointPlacementDomains11";
 
 const policies={isForbiddenPublishAnswer:()=>false,isOverGenericThemeWord:()=>false};
 const options={targetThematicEntries:1,maxNodes:100,deadlineMs:3000,seed:1,policies};
@@ -119,4 +122,168 @@ test("node and deadline limits remain bounded, not contradictions",()=>{
 test("safe thematic identity bound exhausts without accepting a below-target terminal",()=>{
   const result=runJointCrosswordSearch11({...options,candidates:candidates.map(c=>({...c,thematic:false})),targetThematicEntries:1});
   assert.equal(result.termination,"exhausted");assert.equal(result.metrics.thematicBoundPrunes,1);assert.equal(result.result,null);
+});
+
+const qualityPolicy=DEFAULT_JOINT_QUALITY_POLICY;
+const qualityCandidates=(scores:(number|undefined)[],thematic=9):JointCandidate[]=>[
+  ...Array.from({length:thematic},(_,i)=>({answer:`THEME${i}`,thematic:true,source:"model" as const})),
+  ...scores.map((score,i)=>({answer:`GENERAL${i}`,thematic:false,source:"filler" as const,score})),
+];
+const issueFor=(scores:(number|undefined)[],thematic=9,terminal=true)=>
+  jointQualityIssue(summarizeJointQuality(qualityCandidates(scores,thematic)),qualityPolicy,terminal);
+
+test("quality checks the actual denominator and accepts only a strict thematic majority",()=>{
+  assert.equal(issueFor(Array(8).fill(80)),null); // 9/17
+  assert.equal(issueFor(Array(9).fill(80)),"thematic-majority"); // 9/18
+  assert.equal(issueFor(Array(10).fill(80)),"thematic-majority"); // 9/19
+  assert.equal(issueFor([],1),null); // No general fill: aggregates are not invented.
+  assert.equal(issueFor([],0),"thematic-majority");
+});
+
+test("fill floor and low-score count cannot be concealed by a high average",()=>{
+  assert.equal(issueFor([19,100,100,100]),"general-score-floor");
+  assert.equal(issueFor([20,49,49,100,100,100,100]),"general-low-score-limit");
+  assert.equal(issueFor([20,49,90,90]),null);
+  assert.equal(issueFor([50,50,60,60]),null); // Median 55, mean 55, zero below 50.
+  for(const score of [undefined,NaN,Infinity,-1,101]) {
+    assert.equal(issueFor([score,90]),"general-score-missing-or-invalid");
+  }
+});
+
+test("median and mean are independent terminal gates; repairable partial states survive",()=>{
+  assert.equal(issueFor([40,40,50],4),"general-score-median");
+  assert.equal(issueFor([20,50,50,50],5),"general-score-mean");
+  assert.equal(issueFor([20,50,50,50],1,false),null);
+  assert.equal(issueFor([40,40,50],1,false),null);
+  assert.equal(issueFor([19],9,false),"general-score-floor");
+  assert.equal(issueFor([20,30,40],9,false),"general-low-score-limit");
+});
+
+test("quality ordering preserves thematic priority, ranks general scores and has stable seeded ties",()=>{
+  const thematic:JointCandidate={answer:"THEME",thematic:true,source:"model"};
+  const low:JointCandidate={answer:"LOW",thematic:false,source:"filler",score:20};
+  const high:JointCandidate={answer:"HIGH",thematic:false,source:"filler",score:90};
+  assert.ok(compareJointQualityValues(thematic,high,1)<0);
+  assert.ok(compareJointQualityValues(high,low,1)<0);
+  assert.ok(compareJointQualityValues(low,{...high,score:undefined},1)<0);
+  const tied={...low,score:90};
+  assert.equal(compareJointQualityValues(high,tied,13),compareCspValuePriority(
+    {candidate:high,remainingOptions:0},{candidate:tied,remainingOptions:0},13));
+});
+
+test("authoritative terminal composition applies quality independently of structural acceptance",()=>{
+  const check=(scores:(number|undefined)[])=>{
+    let general=0;
+    const scored=candidates.map(candidate=>({...candidate,score:candidate.thematic?undefined:scores[general++]}));
+    const index=new CspCandidateIndex(scored,normalizeCspAnswer11);
+    let state=emptyJointState();
+    const ordered=[fixtureEntries[0],...fixtureEntries.filter(e=>e.direction==="down"),...fixtureEntries.filter(e=>e.direction==="across").slice(1)];
+    for(const entry of ordered) {
+      const child=commitJointPlacement(state,index,index.id(entry.answer)!,entry,policies);
+      assert.ok(child);state=child;
+    }
+    const terminal=validateJointTerminal(state,index,8,policies,qualityPolicy);
+    assert.equal(terminal.validation.accepted,true);
+    assert.equal(terminal.derivationAgrees,true);
+    return terminal;
+  };
+  const accepted=check(Array(6).fill(80));
+  assert.equal(accepted.accepted,true);
+  assert.equal(accepted.quality.generalEntries,6);
+  assert.equal(accepted.quality.mean,80);
+  assert.equal(check([19,100,100,100,100,100]).reason,"general-score-floor");
+  assert.equal(check([20,30,40,100,100,100]).reason,"general-low-score-limit");
+  assert.equal(check([20,50,50,50,50,50]).reason,"general-score-mean");
+  assert.equal(check([undefined,80,80,80,80,80]).reason,"general-score-missing-or-invalid");
+});
+
+test("quality search passes unchanged structural validation with interleaved scored fill",{timeout:10000},()=>{
+  const scored=candidates.map(candidate=>({...candidate,score:candidate.thematic?undefined:80}));
+  const report=runJointCrosswordSearch11({...options,candidates:scored,targetThematicEntries:8,
+    maxNodes:25000,deadlineMs:6000,seed:fixtureSeed,qualityPolicy});
+  assert.equal(report.termination,"success");
+  assert.ok(report.result?.accepted && report.result.validation.accepted);
+  assert.ok(report.result.thematicCount*2>report.result.entries.length);
+  assert.equal(report.result.quality.mean,80);
+  assert.ok(report.metrics.generalPlacementsBeforeTarget>0);
+  assert.equal(report.indexSize,candidates.length);
+});
+
+test("quality policy rejects invalid configuration and retains distinct bounded outcomes",()=>{
+  for(const policy of [{...qualityPolicy,maximumLowScoreEntries:-1},{...qualityPolicy,minimumGeneralMean:NaN},
+    {...qualityPolicy,minimumGeneralScore:101},{...qualityPolicy,maximumLowScoreEntries:0.5}]) {
+    assert.equal(runJointCrosswordSearch11({...options,candidates,qualityPolicy:policy}).termination,"invalid-input");
+  }
+  assert.equal(runJointCrosswordSearch11({...options,candidates,qualityPolicy,maxNodes:0}).termination,"node-limit");
+  assert.equal(runJointCrosswordSearch11({...options,candidates,qualityPolicy,cancelled:()=>true}).termination,"deadline");
+  const records:JointCandidate[]=[{answer:"CATS",thematic:true,source:"model"},
+    {answer:"BAR",thematic:false,source:"filler",score:19}];
+  const result=runJointCrosswordSearch11({...options,candidates:records,qualityPolicy,maxNodes:1000});
+  assert.ok(result.metrics.qualityPrunes["general-score-floor"]>0);
+  assert.equal(result.result,null);
+});
+
+test("without quality policy scores do not change Ticket 81 assignments or search order",()=>{
+  const config={...options,targetThematicEntries:8,maxNodes:25000,deadlineMs:6000,seed:fixtureSeed};
+  const original=runJointCrosswordSearch11({...config,candidates});
+  const scored=candidates.map((candidate,i)=>({...candidate,score:i%2?0:100}));
+  const control=runJointCrosswordSearch11({...config,candidates:scored});
+  assert.equal(original.termination,"success");
+  assert.equal(control.termination,original.termination);
+  assert.deepEqual(control.result?.entries,original.result?.entries);
+  assert.deepEqual(control.metrics,original.metrics);
+});
+
+test("quality rejection of a terminal continues search, with policy active on later terminals",context=>{
+  const check=qualityModule.jointQualityIssue;
+  let terminals=0;
+  // Isolate search continuation; the real majority/aggregate calculations are tested above.
+  context.mock.method(qualityModule,"jointQualityIssue",(...args:Parameters<typeof check>)=>{
+    if(args[2] && ++terminals===1) return "thematic-majority";
+    return check(...args);
+  });
+  const scored=candidates.map(candidate=>({...candidate,score:80}));
+  const config={...options,candidates:scored,targetThematicEntries:8,maxNodes:25000,
+    deadlineMs:6000,seed:fixtureSeed,qualityPolicy};
+  const report=runJointCrosswordSearch11(config);
+  assert.equal(report.termination,"success");
+  assert.equal(report.metrics.terminalRejections["thematic-majority"],1);
+  assert.ok(terminals>=2);
+  assert.ok(report.result?.accepted && report.result.validation.accepted);
+  assert.equal(check(report.result.quality,qualityPolicy,true),null);
+});
+
+test("quality keeps low and missing scores in lexical support and prunes only after commitment",context=>{
+  const propagate=placementModule.propagateJointDomains;
+  const observed=new Set<string>();
+  context.mock.method(placementModule,"propagateJointDomains",(...args:Parameters<typeof propagate>)=>{
+    const result=propagate(...args);
+    for(const domain of result.domains) for(const alternative of domain.alternatives) {
+      for(const candidate of alternative.domain) observed.add(candidate.answer);
+    }
+    return result;
+  });
+  const records:JointCandidate[]=[{answer:"CATS",thematic:true,source:"model"},
+    {answer:"BAR",thematic:false,source:"filler",score:19},
+    {answer:"RAT",thematic:false,source:"filler"}];
+  const report=runJointCrosswordSearch11({...options,candidates:records,qualityPolicy,maxNodes:1000});
+  assert.equal(report.indexSize,records.length);
+  assert.ok(observed.has("BAR") && observed.has("RAT"));
+  assert.ok(report.metrics.qualityPrunes["general-score-floor"]>0);
+  assert.ok(report.metrics.qualityPrunes["general-score-missing-or-invalid"]>0);
+});
+
+test("quality search is deterministic and cancellation during active search remains bounded",()=>{
+  const scored=candidates.map(candidate=>({...candidate,score:80}));
+  const config={...options,candidates:scored,targetThematicEntries:8,maxNodes:25000,
+    deadlineMs:6000,seed:fixtureSeed,qualityPolicy};
+  const first=runJointCrosswordSearch11(config),second=runJointCrosswordSearch11(config);
+  assert.equal(first.termination,"success");
+  assert.deepEqual(first.result?.entries,second.result?.entries);
+  assert.deepEqual(first.metrics,second.metrics);
+  let checks=0;
+  const cancelled=runJointCrosswordSearch11({...config,cancelled:()=>++checks>60});
+  assert.equal(cancelled.termination,"deadline");
+  assert.ok(cancelled.metrics.nodes>0);
+  assert.equal(cancelled.result,null);
 });
