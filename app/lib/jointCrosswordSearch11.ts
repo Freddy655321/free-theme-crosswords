@@ -84,14 +84,25 @@ export function compareJointQualityValues(a:Readonly<JointCandidate>,b:Readonly<
   return compareCspValuePriority({candidate:a,remainingOptions:0},{candidate:b,remainingOptions:0},seed);
 }
 
-export function selectJointOpportunity(domains:OpportunityDomain[]):OpportunityDomain|null {
+export function selectJointOpportunity(domains:OpportunityDomain[], thematic?: {
+  count: number; target: number; ids: readonly number[];
+}):OpportunityDomain|null {
   // An empty optional domain is not a mandatory wipeout. It need not be closed now.
   let best:OpportunityDomain|null=null;
+  let bestHasThematic=false;
   for(const domain of domains) {
     if(!domain.count) continue;
+    const hasThematic=Boolean(thematic && thematic.count<thematic.target &&
+      domain.alternatives.some(alternative=>thematic.ids.some(id=>{
+        alternative.domain.index.budget.step();
+        return alternative.domain.has(id);
+      })));
     const a=domain.opportunity,b=best?.opportunity;
-    if(!best||domain.count<best.count||(domain.count===best.count&&b&&
-      (a.row<b.row||(a.row===b.row&&(a.col<b.col||(a.col===b.col&&a.direction.localeCompare(b.direction)<0)))))) best=domain;
+    if(!best||(hasThematic&&!bestHasThematic)||(hasThematic===bestHasThematic&&
+      (domain.count<best.count||(domain.count===best.count&&b&&
+      (a.row<b.row||(a.row===b.row&&(a.col<b.col||(a.col===b.col&&a.direction.localeCompare(b.direction)<0)))))))) {
+      best=domain;bestHasThematic=hasThematic;
+    }
   }
   return best;
 }
@@ -164,7 +175,9 @@ export function runJointCrosswordSearch11(opts:JointSearchOptions) {
       metrics.propagationCalls++;
       const propagated=propagateJointDomains(state,source,opts.policies,metrics.domains);
       if(propagated.contradiction) {metrics.mandatoryDomainWipeouts++;return false;}
-      const selected=selectJointOpportunity(propagated.domains);
+      const selected=selectJointOpportunity(propagated.domains,{
+        count:state.thematicCount,target:opts.targetThematicEntries,ids:thematicIds,
+      });
       if(!selected) return false;
       const values:{id:number;row:number;col:number;direction:"across"|"down"}[]=[];
       for(const alternative of selected.alternatives) for(const candidate of alternative.domain) {

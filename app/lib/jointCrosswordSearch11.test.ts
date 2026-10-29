@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CspCandidateIndex } from "./cspCandidateDomains";
+import { CspCandidateIndex, CspDomainBudget, CspDomainDeadline } from "./cspCandidateDomains";
 import { normalizeCspAnswer11 } from "./crosswordCspAdapter11";
 import { compareCspValuePriority } from "./crosswordCsp11";
 import { runJointCrosswordSearch11,validateJointTerminal,selectJointOpportunity,compareJointQualityValues } from "./jointCrosswordSearch11";
 import { DEFAULT_JOINT_QUALITY_POLICY, jointQualityIssue, summarizeJointQuality } from "./jointSearchQuality11";
-import { commitJointPlacement,emptyJointState,type JointCandidate } from "./jointPlacementDomains11";
+import { commitJointPlacement,emptyJointState,type JointCandidate,type OpportunityDomain } from "./jointPlacementDomains11";
 import { deriveEntriesFromGrid } from "./publishPipeline/deriveEntries";
 import { runGridValidation } from "./gridValidation/validateGrid";
 import * as validationModule from "./gridValidation/validateGrid";
@@ -74,18 +74,94 @@ test("MRV ignores empty optional domains and uses deterministic coordinate ties"
   assert.equal(selectJointOpportunity(domains.slice(0,1)),null);
 });
 
-test("failed terminal validation continues through legal expansions",{timeout:10000},context=>{
+function opportunityFixture() {
+  const index=new CspCandidateIndex<JointCandidate>([
+    {answer:"CAT",thematic:true,source:"model"},
+    {answer:"CAR",thematic:false,source:"filler",score:90},
+    {answer:"BAR",thematic:false,source:"filler",score:80},
+  ],normalizeCspAnswer11);
+  const make=(row:number,col:number,answers:string[],direction:"across"|"down"="down"):OpportunityDomain=>{
+    const domain=index.domain(3).filter(c=>answers.includes(c.answer));
+    return {opportunity:{row,col,direction},count:domain.length,
+      alternatives:[{row,col,direction,length:3,crossingOffset:0,domain}]};
+  };
+  return {index,make,preference:{count:1,target:2,ids:[index.id("CAT")!]}};
+}
+
+test("below target thematic-capable opportunity beats smaller general-only MRV without changing domains",()=>{
+  const {make,preference}=opportunityFixture();
+  const general=make(0,0,["BAR"]),mixed=make(3,3,["CAT","CAR"]),domains=[general,mixed];
+  const before=domains.map(d=>d.alternatives[0].domain.map(c=>c.answer));
+  assert.equal(selectJointOpportunity(domains),general);
+  assert.equal(selectJointOpportunity(domains,preference),mixed);
+  assert.deepEqual(domains.map(d=>d.alternatives[0].domain.map(c=>c.answer)),before);
+  assert.equal(mixed.count,2);
+  assert.ok([...mixed.alternatives[0].domain].some(c=>!c.thematic));
+});
+
+test("thematic-capable class preserves mixed-domain MRV and row column direction ties",()=>{
+  const {make,preference}=opportunityFixture();
+  const larger=make(0,0,["CAT","CAR","BAR"]),smaller=make(8,8,["CAT","CAR"]);
+  assert.equal(selectJointOpportunity([larger,smaller],preference),smaller);
+  const row=make(1,8,["CAT","CAR"]),col=make(1,2,["CAT","CAR"]),across=make(1,2,["CAT","CAR"],"across");
+  for(const domains of [[smaller,col,larger,across,row],[row,across,larger,col,smaller]]) {
+    assert.equal(selectJointOpportunity(domains,preference),across);
+  }
+});
+
+test("fallback and at-or-above-target selection preserve existing MRV",()=>{
+  const {make,preference}=opportunityFixture();
+  const general=make(0,0,["BAR"]),mixed=make(3,3,["CAT","CAR"]),empty=make(0,0,[]);
+  for(const count of [2,3]) assert.equal(selectJointOpportunity([mixed,general],{...preference,count}),general);
+  const noThematic=[make(2,2,["CAR","BAR"]),general,empty];
+  assert.equal(selectJointOpportunity(noThematic,preference),selectJointOpportunity(noThematic));
+  assert.equal(selectJointOpportunity([empty],preference),null);
+});
+
+test("thematic membership can occur in a later geometry alternative",()=>{
+  const {make,preference}=opportunityFixture();
+  const mixed=make(2,2,["CAR"]),later=make(3,2,["CAT"]);
+  mixed.alternatives.push(...later.alternatives);mixed.count++;
+  assert.equal(selectJointOpportunity([make(0,0,["BAR"]),mixed],preference),mixed);
+});
+
+test("thematic opportunity membership checks remain cooperatively cancellable",()=>{
+  let cancelled=false;
+  const budget=new CspDomainBudget(Infinity,()=>cancelled);
+  const index=new CspCandidateIndex<JointCandidate>([{answer:"BAR",thematic:false,source:"filler"}],normalizeCspAnswer11,budget);
+  const domain:OpportunityDomain={opportunity:{row:0,col:0,direction:"down"},count:1,
+    alternatives:[{row:0,col:0,direction:"down",length:3,crossingOffset:0,domain:index.domain(3)}]};
+  cancelled=true;
+  assert.throws(()=>selectJointOpportunity([domain],{count:0,target:1,ids:Array(512).fill(100)}),CspDomainDeadline);
+});
+
+test("thematic opportunity preference retains closure backtracking and deterministic bounded search",()=>{
+  const records:JointCandidate[]=["CATS","BAR","RAT","CAR","BAT","TAR","ART"].map((answer,i)=>
+    ({answer,thematic:i%2===0,source:i%2===0?"model":"filler"}));
+  const config={...options,candidates:records,targetThematicEntries:2,maxNodes:1000};
+  const first=runJointCrosswordSearch11(config),second=runJointCrosswordSearch11(config);
+  assert.equal(first.termination,"node-limit");
+  assert.ok(first.metrics.backtracks>0&&first.metrics.closureBranches>0);
+  assert.ok(first.metrics.generalPlacementsBeforeTarget>0);
+  assert.deepEqual(first.metrics,second.metrics);
+  assert.deepEqual(first.bestState,second.bestState);
+});
+
+test("failed terminal validation continues through legal expansions or backtracking",{timeout:10000},context=>{
   const validate=validationModule.runGridValidation;
   let calls=0;
+  let rejectedGrid="";
   context.mock.method(validationModule,"runGridValidation",(input:Parameters<typeof validate>[0])=>{
     const actual=validate(input);
+    if(calls===0) rejectedGrid=JSON.stringify(input.grid);
     return ++calls===1?{...actual,accepted:false,issue:"synthetic-extra-rejection"}:actual;
   });
   const report=runJointCrosswordSearch11({...options,candidates,targetThematicEntries:8,seed:fixtureSeed,maxNodes:25000,deadlineMs:6000});
   assert.equal(report.termination,"success");
   assert.equal(report.metrics.terminalRejections["synthetic-extra-rejection"],1);
   assert.ok(report.metrics.terminalStatesTested>=2);
-  assert.ok(report.result!.entries.length>15);
+  assert.ok(report.result!.entries.length>=15);
+  assert.notEqual(JSON.stringify(report.result!.grid),rejectedGrid);
 });
 
 test("disconnected terminal is rejected even with accurate independent answer records",()=>{
