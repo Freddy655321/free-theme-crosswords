@@ -1,6 +1,7 @@
 import type { DerivedEntry } from "./crosswordTypes";
 import { CspCandidateIndex, CspDomainBudget, CspDomainDeadline } from "./cspCandidateDomains";
 import { normalizeCspAnswer11 } from "./crosswordCspAdapter11";
+import { evaluateAnswerEligibility, filterEligibleAnswerCandidates, ANSWER_ELIGIBILITY_POLICY_VERSION } from "./answerEligibility";
 import { compareCspValuePriority } from "./crosswordCsp11";
 import { deriveEntriesFromGrid } from "./publishPipeline/deriveEntries";
 import { runGridValidation, minPublishEntriesForSize } from "./gridValidation/validateGrid";
@@ -50,6 +51,8 @@ export function validateJointTerminal(
   index.budget.check();
   const grid=state.grid.map(row=>row.map(cell=>cell||"#"));
   const entries=deriveEntriesFromGrid(grid);
+  const eligibility={policyVersion:ANSWER_ELIGIBILITY_POLICY_VERSION,
+    exclusions:entries.map(entry=>evaluateAnswerEligibility(entry.answer)).filter(decision=>!decision.eligible)};
   const key=(row:number,col:number,direction:string)=>`${row}:${col}:${direction}`;
   const placements=new Map(state.placed.map(p=>[key(p.row,p.col,p.dir),p]));
   const identities=new Set<number>(),answers=new Set<string>();
@@ -69,10 +72,10 @@ export function validateJointTerminal(
   const connected=connectedLetters(grid);
   const validation=runGridValidation({grid,derived:entries,policies});
   const quality=summarizeJointQuality(composition.map(item=>item.candidate),qualityPolicy?.lowScoreThreshold);
-  const reason=!agrees?"derivation-mismatch":!connected?"disconnected":thematicCount<target?"thematic-target":
+  const reason=eligibility.exclusions.length?"answer-ineligible":!agrees?"derivation-mismatch":!connected?"disconnected":thematicCount<target?"thematic-target":
     validation.issue ?? (qualityPolicy ? jointQualityIssue(quality,qualityPolicy,true) : null);
   index.budget.check();
-  return {accepted:reason===null,reason,grid,entries,composition,thematicCount,connected,derivationAgrees:agrees,validation,quality};
+  return {accepted:reason===null,reason,grid,entries,composition,thematicCount,connected,derivationAgrees:agrees,validation,quality,eligibility};
 }
 
 export function compareJointQualityValues(a:Readonly<JointCandidate>,b:Readonly<JointCandidate>,seed:number):number {
@@ -120,19 +123,26 @@ export function runJointCrosswordSearch11(opts:JointSearchOptions) {
     qualityPrunes:{} as Record<string,number>,
     generalPlacementsBeforeTarget:0,domains:newPlacementDomainMetrics()};
   let index:CspCandidateIndex<JointCandidate>|null=null;
+  // Null means eligibility inventory was not completed (invalid input/cancellation).
+  let eligibilityInventory:ReturnType<typeof filterEligibleAnswerCandidates>["inventory"]|null=null;
   let bestState=emptyJointState();
   let result:ReturnType<typeof validateJointTerminal>|null=null;
   let indexMs=0,searchStarted=Date.now();
   let termination:"success"|"exhausted"|"deadline"|"node-limit"|"invalid-input"="exhausted";
   const finish=()=>({termination,result,bestState,metrics,indexConstructionMs:indexMs,
-    engineElapsedMs:Date.now()-searchStarted,totalElapsedMs:Date.now()-started,indexSize:index?.size??0});
+    engineElapsedMs:Date.now()-searchStarted,totalElapsedMs:Date.now()-started,indexSize:index?.size??0,
+    sourceCandidateCount:opts.candidates.length,eligibilityInventory});
   if(!Number.isInteger(opts.targetThematicEntries)||opts.targetThematicEntries<0||
     !Number.isInteger(opts.maxNodes)||opts.maxNodes<0||!Number.isFinite(opts.deadlineMs)||opts.deadlineMs<0||
     (opts.qualityPolicy && !validJointQualityPolicy(opts.qualityPolicy))) {
     termination="invalid-input";return finish();
   }
   try {
-    index=new CspCandidateIndex(opts.candidates,normalizeCspAnswer11,budget);
+    budget.check();
+    const eligible=filterEligibleAnswerCandidates(opts.candidates,()=>budget.step());
+    budget.check();
+    eligibilityInventory=eligible.inventory;
+    index=new CspCandidateIndex(eligible.candidates,normalizeCspAnswer11,budget);
     indexMs=Date.now()-started;
     searchStarted=Date.now();deadlineAt=searchStarted+opts.deadlineMs;
     const source=index;
